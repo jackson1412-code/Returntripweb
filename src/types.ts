@@ -16,6 +16,9 @@ export type CabSnapshot = {
 export type ReturnTrip = {
   id: number;
   driverId: number;
+  bookingId?: number | string | null;
+  bookingState?: string | null;
+  pendingRequest?: unknown;
   pickupLocation?: unknown;
   pickupLat?: number | null;
   pickupLong?: number | null;
@@ -26,6 +29,7 @@ export type ReturnTrip = {
   pickupFormatAddress?: AddressPayload | null;
   dropFormatAddress?: AddressPayload | null;
   cabSnapshot?: CabSnapshot | null;
+  driverOfferPrice?: number | string | null;
   finalPrice?: number | string | null;
   discountAmount?: number | string | null;
   expiresAt?: string | null;
@@ -55,11 +59,28 @@ export type BookingCustomerDraft = {
 export type ApiResponse = {
   success?: boolean;
   code?: number;
-  data?: ReturnTrip[] | { rows?: ReturnTrip[]; count?: number; totalPages?: number };
+  data?: ReturnTrip | ReturnTrip[] | { rows?: ReturnTrip[]; count?: number; totalPages?: number };
   pagination?: {
     currentPage?: number;
     totalPages?: number;
     totalItems?: number;
     itemsPerPage?: number;
   };
+};
+
+export type ReturnTripUnavailableEvent = {
+  tripIds: Array<number | string>;
+  bookedReturnTripId?: number | string | null;
+  unavailableReturnTripIds: Array<number | string>;
+  reason?: string;
+  ts?: number;
+};
+
+export type ReturnTripAvailableEvent = {
+  tripIds: Array<number | string>;
+  availableReturnTripIds: Array<number | string>;
+  createdReturnTripId?: number | string | null;
+  trip?: ReturnTrip | null;
+  reason?: string;
+  ts?: number;
 };
