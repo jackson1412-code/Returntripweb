@@ -10,6 +10,18 @@ type RequestOptions = {
   method?: 'GET' | 'POST';
 };
 
+export class ApiRequestError extends Error {
+  status: number;
+  code?: number;
+
+  constructor(message: string, status: number, code?: number) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 type SessionStartResponse = {
   sid?: string;
   sessionId?: string;
@@ -169,8 +181,27 @@ async function requestJson<T>(path: string, options: RequestOptions = {}): Promi
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    const detail = body.trim().slice(0, 300);
-    throw new Error(detail ? `Request failed with ${response.status}: ${detail}` : `Request failed with ${response.status}`);
+    let parsedMessage = '';
+    let parsedCode: number | undefined;
+
+    try {
+      const parsed = JSON.parse(body) as {
+        message?: string;
+        code?: number;
+        data?: { message?: string; code?: number };
+      };
+      parsedMessage = parsed.message || parsed.data?.message || '';
+      parsedCode = parsed.code || parsed.data?.code;
+    } catch {
+      parsedMessage = '';
+    }
+
+    const detail = (parsedMessage || body.trim()).slice(0, 300);
+    throw new ApiRequestError(
+      detail || `Request failed with ${response.status}`,
+      response.status,
+      parsedCode,
+    );
   }
 
   return response.json() as Promise<T>;

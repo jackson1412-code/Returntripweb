@@ -32,6 +32,7 @@ export type ReturnTrip = {
   driverOfferPrice?: number | string | null;
   finalPrice?: number | string | null;
   discountAmount?: number | string | null;
+  estimatedMin?: number | null;
   expiresAt?: string | null;
   status?: string | null;
   minutesToExpiry?: number | null;

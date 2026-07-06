@@ -19,7 +19,9 @@ import {
   WalletCards,
   X,
 } from 'lucide-react';
+import rootCabsLogo from './assets/rootcabs-logo.svg';
 import {
+  ApiRequestError,
   bookReturnTrip,
   loadReturnTrip,
   loadReturnTrips,
@@ -67,6 +69,22 @@ type BookingRequestState = {
   status?: string | null;
   bookingState?: string | null;
 };
+
+type SessionConflictState = {
+  message: string;
+  confirmAction: () => Promise<void>;
+};
+
+type SortKey = 'relevance' | 'rating' | 'price' | 'fastest' | 'departure' | 'arrival';
+
+const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
+  { key: 'relevance', label: 'Relevance' },
+  { key: 'rating', label: 'Rating' },
+  { key: 'price', label: 'Price' },
+  { key: 'fastest', label: 'Fastest' },
+  { key: 'departure', label: 'Departure' },
+  { key: 'arrival', label: 'Arrival' },
+];
 
 const formatMoney = (value: unknown) => {
   const num = Number(value);
@@ -131,6 +149,51 @@ const formatPhonePreview = (value: string) => {
 };
 
 const getTripFareValue = (trip: ReturnTrip) => trip.driverOfferPrice ?? trip.finalPrice;
+
+const NAV_LINKS = [
+  { label: 'Home', active: true },
+  { label: 'Join Us', href: 'https://rootcabs.com/join-us/' },
+  { label: 'Cab Cities', dropdown: true },
+];
+
+const CAB_CITY_LINKS = [
+  { label: 'Chennai', href: 'https://rootcabs.com/taxi-in-chennai/' },
+  { label: 'Kanchipuram', href: 'https://rootcabs.com/taxi-service-in-kanchipuram' },
+  { label: 'Tiruvannamalai', href: 'https://rootcabs.com/taxi-in-tiruvannamalai/' },
+  { label: 'Ranipet', href: 'https://rootcabs.com/taxi-in-ranipet/' },
+  { label: 'Vellore', href: 'https://rootcabs.com/taxi-in-vellore/' },
+];
+
+const FEATURE_CARDS = [
+  {
+    key: 'refresh',
+    eyebrow: 'Live availability',
+    text: 'Pull the latest customer-ready return trips from the backend.',
+    cta: 'Refresh now',
+    tone: 'promo-card--violet',
+  },
+  {
+    key: 'expiring',
+    eyebrow: 'Expiring soon',
+    text: 'Focus on rides that are about to disappear from the board.',
+    cta: 'Toggle filter',
+    tone: 'promo-card--rose',
+  },
+  {
+    key: 'rating',
+    eyebrow: 'Top rated drivers',
+    text: 'Push the highest-rated available drivers to the top.',
+    cta: 'Sort by rating',
+    tone: 'promo-card--mint',
+  },
+  {
+    key: 'price',
+    eyebrow: 'Lowest fare first',
+    text: 'Surface the most affordable return trips first.',
+    cta: 'Sort by price',
+    tone: 'promo-card--sky',
+  },
+];
 
 const createDeviceId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -265,8 +328,10 @@ function App() {
   const [customerSession, setCustomerSession] = useState<CustomerSessionState | null>(null);
   const [sessionBookings, setSessionBookings] = useState<SessionBookingState[]>([]);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [cabCitiesOpen, setCabCitiesOpen] = useState(false);
   const [profileView, setProfileView] = useState<null | 'profile' | 'upcoming'>(null);
   const [query, setQuery] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('relevance');
   const [pickupCity, setPickupCity] = useState('all');
   const [destinationCity, setDestinationCity] = useState('all');
   const [minRating, setMinRating] = useState(0);
@@ -277,6 +342,7 @@ function App() {
   const [bookingStep, setBookingStep] = useState<BookingStep>('phone');
   const [bookingBusy, setBookingBusy] = useState(false);
   const [bookingError, setBookingError] = useState<string | null>(null);
+  const [sessionConflict, setSessionConflict] = useState<SessionConflictState | null>(null);
   const [sid, setSid] = useState('');
   const [deviceId, setDeviceId] = useState('');
   const [deviceToken] = useState(getBrowserDeviceToken);
@@ -531,8 +597,15 @@ function App() {
         if (maxPrice > 0 && Number(getTripFareValue(trip) || 0) > maxPrice) return false;
         return matchesText(trip, query);
       })
-      .sort((a, b) => buildRecommendedScore(b) - buildRecommendedScore(a));
-  }, [destinationCity, maxPrice, minRating, onlyExpiringSoon, pickupCity, query, trips]);
+      .sort((a, b) => {
+        if (sortKey === 'rating') return Number(b.driverRating || b.Driver?.rating || 0) - Number(a.driverRating || a.Driver?.rating || 0);
+        if (sortKey === 'price') return Number(getTripFareValue(a) || 0) - Number(getTripFareValue(b) || 0);
+        if (sortKey === 'fastest') return Number(a.estimatedMin || Number.MAX_SAFE_INTEGER) - Number(b.estimatedMin || Number.MAX_SAFE_INTEGER);
+        if (sortKey === 'departure') return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+        if (sortKey === 'arrival') return new Date(a.expiresAt || 0).getTime() - new Date(b.expiresAt || 0).getTime();
+        return buildRecommendedScore(b) - buildRecommendedScore(a);
+      });
+  }, [destinationCity, maxPrice, minRating, onlyExpiringSoon, pickupCity, query, sortKey, trips]);
 
   const highestPrice = useMemo(() => Math.max(...trips.map((trip) => Number(getTripFareValue(trip)) || 0), 0), [trips]);
   const upcomingSessionBookings = useMemo(
@@ -578,11 +651,34 @@ function App() {
     setBookingStep('phone');
     setBookingBusy(false);
     setBookingError(null);
+    setSessionConflict(null);
     setBookingNotice('');
     setBookingReference('');
     setSid('');
     setCustomerId(null);
     setOtpCode('');
+  };
+
+  const applyVerifiedCustomer = (
+    nextCustomerId: number | string | null,
+    nextCustomer: { firstName?: string; status?: string; phoneNumber?: string } | undefined,
+    forceExistingCustomer = customerDraft.isExistingCustomer,
+  ) => {
+    setCustomerId(nextCustomerId);
+    setCustomerSession({
+      phoneNumber: digitsOnly(customerDraft.phoneNumber),
+      name: nextCustomer?.firstName || customerDraft.name || '',
+      isExistingCustomer: forceExistingCustomer,
+      needsName: Boolean(customerDraft.needsName || nextCustomer?.status === 'NOT_ACTIVE'),
+      welcomeBackMessage: customerDraft.welcomeBackMessage,
+    });
+    const needsProfile = customerDraft.needsName || nextCustomer?.status === 'NOT_ACTIVE';
+    setBookingNotice(
+      needsProfile
+        ? 'OTP accepted. Complete the customer profile before final booking.'
+        : 'Customer verified successfully. Booking can be confirmed now.',
+    );
+    setBookingStep(needsProfile ? 'identity' : 'confirm');
   };
 
   const continueFromPhone = async () => {
@@ -638,55 +734,36 @@ function App() {
     try {
       const verification = await verifyCustomerOtp(otpCode, sid, deviceToken, deviceId);
       if (verification.requiresDeviceOverride) {
-        const confirmed = window.confirm(
-          verification.message || 'This phone number is active on another device. Continue on this browser?',
-        );
-
-        if (!confirmed) {
-          setBookingNotice('Continue when the customer is ready to use this browser for verification.');
-          return;
-        }
-
-        const retryResult = await verification.confirmLogoutAllDevices?.();
-        if (!retryResult?.success) {
-          throw new Error(retryResult?.message || 'OTP retry failed');
-        }
-        setCustomerId(retryResult.customerId ?? null);
-        setCustomerSession({
-          phoneNumber: digitsOnly(customerDraft.phoneNumber),
-          name: retryResult.customer?.firstName || customerDraft.name || '',
-          isExistingCustomer: true,
-          needsName: Boolean(customerDraft.needsName || retryResult.customer?.status === 'NOT_ACTIVE'),
-          welcomeBackMessage: customerDraft.welcomeBackMessage,
+        setSessionConflict({
+          message: verification.message || 'This phone number is signed in on another device. Continue here and sign out the other session?',
+          confirmAction: async () => {
+            setBookingBusy(true);
+            setBookingError(null);
+            try {
+              const retryResult = await verification.confirmLogoutAllDevices?.();
+              if (!retryResult?.success) {
+                throw new Error(retryResult?.message || 'OTP retry failed');
+              }
+              setSessionConflict(null);
+              applyVerifiedCustomer(retryResult.customerId ?? null, retryResult.customer, true);
+            } catch (err) {
+              setBookingError(
+                err instanceof Error && err.message
+                  ? err.message
+                  : 'We could not switch this customer to the current browser. Please try again.',
+              );
+            } finally {
+              setBookingBusy(false);
+            }
+          },
         });
-        const needsProfile = customerDraft.needsName || retryResult.customer?.status === 'NOT_ACTIVE';
-        setBookingNotice(
-          needsProfile
-            ? 'OTP accepted. Complete the customer profile before final booking.'
-            : 'Customer verified successfully. Booking can be confirmed now.',
-        );
-        setBookingStep(needsProfile ? 'identity' : 'confirm');
         return;
       }
 
       if (!verification.success) {
         throw new Error('OTP verification failed');
       }
-      setCustomerId(verification.customerId ?? null);
-      setCustomerSession({
-        phoneNumber: digitsOnly(customerDraft.phoneNumber),
-        name: verification.customer?.firstName || customerDraft.name || '',
-        isExistingCustomer: customerDraft.isExistingCustomer,
-        needsName: Boolean(customerDraft.needsName || verification.customer?.status === 'NOT_ACTIVE'),
-        welcomeBackMessage: customerDraft.welcomeBackMessage,
-      });
-      const needsProfile = customerDraft.needsName || verification.customer?.status === 'NOT_ACTIVE';
-      setBookingNotice(
-        needsProfile
-          ? 'OTP accepted. Complete the customer profile before final booking.'
-          : 'Customer verified successfully. Booking can be confirmed now.',
-      );
-      setBookingStep(needsProfile ? 'identity' : 'confirm');
+      applyVerifiedCustomer(verification.customerId ?? null, verification.customer, customerDraft.isExistingCustomer);
     } catch (err) {
       setBookingError(
         err instanceof Error && err.message
@@ -785,7 +862,14 @@ function App() {
         );
       }
     } catch (err) {
-      setBookingError(err instanceof Error ? err.message : 'Unable to send booking request');
+      if (err instanceof ApiRequestError && err.status === 409) {
+        closeBooking();
+        setBookingRequestState(null);
+        setPageNotice(err.message || 'Driver is unavailable for this return trip');
+        void refreshTrips().catch(() => undefined);
+      } else {
+        setBookingError(err instanceof Error ? err.message : 'Unable to send booking request');
+      }
     } finally {
       setBookingBusy(false);
     }
@@ -793,6 +877,24 @@ function App() {
 
   const startAnotherBooking = () => {
     closeBooking();
+  };
+
+  const handleFeatureAction = (key: string) => {
+    if (key === 'refresh') {
+      void refreshTrips();
+      return;
+    }
+    if (key === 'expiring') {
+      setOnlyExpiringSoon((current) => !current);
+      return;
+    }
+    if (key === 'rating') {
+      setSortKey('rating');
+      return;
+    }
+    if (key === 'price') {
+      setSortKey('price');
+    }
   };
 
   useEffect(() => {
@@ -806,26 +908,69 @@ function App() {
 
   return (
     <div className={`page-shell${selectedTrip || bookingRequestState || profileView ? ' page-shell--booking-open' : ''}`}>
-      <header className="topbar">
-        <div>
-          <h1>Return Trips</h1>
+      <header className="site-nav">
+        <div className="site-nav__brand">
+          <img className="site-nav__logo" src={rootCabsLogo} alt="Root Cabs" />
         </div>
-        <div className="topbar__actions">
-          <div className="topbar__action-row">
-            <label className="searchbox">
-              <Search size={18} />
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search city, driver, cab" />
-            </label>
-            {customerSession ? (
-              <div className="topbar__profile">
-                <button className="profile-chip" type="button" onClick={() => setProfileOpen((current) => !current)}>
-                  <UserRound size={16} />
-                  <span>{customerSession.name || formatPhonePreview(customerSession.phoneNumber)}</span>
+        <nav className="site-nav__links" aria-label="Primary navigation">
+          {NAV_LINKS.map((link) => (
+            link.dropdown ? (
+              <div key={link.label} className={`site-nav__dropdown${cabCitiesOpen ? ' is-open' : ''}`}>
+                <button
+                  type="button"
+                  className={`site-nav__link${link.active ? ' is-active' : ''}`}
+                  aria-expanded={cabCitiesOpen}
+                  aria-haspopup="menu"
+                  onClick={() => setCabCitiesOpen((current) => !current)}
+                >
+                  <span>{link.label}</span>
+                  <ChevronRight size={14} className="site-nav__caret" />
                 </button>
+                {cabCitiesOpen ? (
+                  <div className="site-nav__dropdown-menu" role="menu" aria-label="Cab cities">
+                    {CAB_CITY_LINKS.map((city) => (
+                      <a
+                        key={city.label}
+                        className="site-nav__dropdown-item"
+                        role="menuitem"
+                        href={city.href}
+                        onClick={() => setCabCitiesOpen(false)}
+                      >
+                        {city.label}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
+            ) : (
+              <button
+                key={link.label}
+                type="button"
+                className={`site-nav__link${link.active ? ' is-active' : ''}`}
+                onClick={() => {
+                  if (link.href) {
+                    window.location.href = link.href;
+                  }
+                }}
+              >
+                <span>{link.label}</span>
+              </button>
+            )
+          ))}
+        </nav>
+        <label className="searchbox site-nav__search">
+          <Search size={18} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search city, driver, cab" />
+        </label>
+        {customerSession ? (
+          <div className="topbar__profile">
+            <button className="profile-chip" type="button" onClick={() => setProfileOpen((current) => !current)}>
+              <UserRound size={16} />
+              <span>{customerSession.name || formatPhonePreview(customerSession.phoneNumber)}</span>
+            </button>
           </div>
-        </div>
+        ) : null}
+        <button type="button" className="site-nav__contact">Contact Us</button>
       </header>
 
       {customerSession && profileOpen ? (
@@ -854,6 +999,15 @@ function App() {
             </button>
           </div>
         </div>
+      ) : null}
+
+      {cabCitiesOpen ? (
+        <button
+          className="site-nav__dropdown-overlay"
+          type="button"
+          aria-label="Close cab cities menu"
+          onClick={() => setCabCitiesOpen(false)}
+        />
       ) : null}
 
       <main className="layout">
@@ -934,6 +1088,39 @@ function App() {
         </aside>
 
         <section className="results">
+          <div className="results-board">
+            <div className="promo-strip">
+              {FEATURE_CARDS.map((card) => (
+                <article key={card.key} className={`promo-card ${card.tone}`}>
+                  <strong>{card.eyebrow}</strong>
+                  <p>{card.text}</p>
+                  <button type="button" className="promo-card__cta" onClick={() => handleFeatureAction(card.key)}>
+                    {card.key === 'expiring' && onlyExpiringSoon ? 'Show all rides' : card.cta}
+                  </button>
+                </article>
+              ))}
+            </div>
+
+            <div className="results-toolbar">
+              <div className="results-toolbar__count">{filteredTrips.length} trips found</div>
+              <div className="results-toolbar__sort">
+                <span className="results-toolbar__label">Sort by</span>
+                <div className="sort-chips">
+                  {SORT_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className={`sort-chip${sortKey === option.key ? ' is-active' : ''}`}
+                      onClick={() => setSortKey(option.key)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
           {pageNotice ? (
             <div className="booking-inline-message booking-inline-message--muted">
               <Sparkles size={16} />
@@ -1263,6 +1450,33 @@ function App() {
             <div className="success-modal__actions">
               <button className="ghost-btn ghost-btn--soft" type="button" onClick={() => setBookingRequestState(null)}>
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {sessionConflict ? (
+        <div className="success-modal">
+          <div className="success-modal__overlay" onClick={() => setSessionConflict(null)} />
+          <div className="success-modal__card success-modal__card--compact">
+            <button className="icon-btn success-modal__close" type="button" onClick={() => setSessionConflict(null)}>
+              <X size={18} />
+            </button>
+            <div className="success-modal__icon success-modal__icon--pending">
+              <ShieldCheck size={34} />
+            </div>
+            <div className="success-modal__copy">
+              <p className="booking-panel__eyebrow">Session already active</p>
+              <h2>Session already active</h2>
+              <p>{sessionConflict.message}</p>
+            </div>
+            <div className="success-modal__actions success-modal__actions--split">
+              <button className="ghost-btn ghost-btn--soft" type="button" disabled={bookingBusy} onClick={() => setSessionConflict(null)}>
+                No, keep current
+              </button>
+              <button className="ghost-btn" type="button" autoFocus disabled={bookingBusy} onClick={() => void sessionConflict.confirmAction()}>
+                {bookingBusy ? 'Continuing...' : 'Yes, continue'}
               </button>
             </div>
           </div>
