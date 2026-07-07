@@ -1,6 +1,8 @@
 import type { ApiResponse, ReturnTrip, ReturnTripAvailableEvent, ReturnTripUnavailableEvent } from './types';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://t264m53j-3000.inc1.devtunnels.ms';
+//const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://t264m53j-3000.inc1.devtunnels.ms';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://sit.api.c4d.smartapis.cyou';
+
 const RETURN_TRIPS_SSE_PATH = import.meta.env.VITE_RETURN_TRIPS_SSE_PATH || '/api/customer/dev/return-trips/events';
 const SSE_DEBUG_PREFIX = '[return-trips:sse]';
 

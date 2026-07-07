@@ -168,28 +168,28 @@ const FEATURE_CARDS = [
   {
     key: 'refresh',
     eyebrow: 'Live availability',
-    text: 'Pull the latest customer-ready return trips from the backend.',
+    text: 'See the latest return trips available right now.',
     cta: 'Refresh now',
     tone: 'promo-card--violet',
   },
   {
     key: 'expiring',
     eyebrow: 'Expiring soon',
-    text: 'Focus on rides that are about to disappear from the board.',
+    text: 'Spot trips that are close to closing so you can book faster.',
     cta: 'Toggle filter',
     tone: 'promo-card--rose',
   },
   {
     key: 'rating',
     eyebrow: 'Top rated drivers',
-    text: 'Push the highest-rated available drivers to the top.',
+    text: 'Bring the best-rated drivers to the top of the list.',
     cta: 'Sort by rating',
     tone: 'promo-card--mint',
   },
   {
     key: 'price',
     eyebrow: 'Lowest fare first',
-    text: 'Surface the most affordable return trips first.',
+    text: 'Show the most budget-friendly trips first.',
     cta: 'Sort by price',
     tone: 'promo-card--sky',
   },
@@ -428,7 +428,6 @@ function App() {
       () => {
         if (!mounted) return;
         console.warn(`${UI_DEBUG_PREFIX} live updates paused, relying on refetch/manual refresh`);
-        setPageNotice('Live updates paused. Availability will refresh on the next reload.');
       },
     );
 
@@ -1293,7 +1292,7 @@ function App() {
                   <input
                     value={otpCode}
                     onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="Enter 4 to 6 digit OTP"
+                    placeholder="Enter 4 digit OTP"
                     inputMode="numeric"
                   />
                 </label>
