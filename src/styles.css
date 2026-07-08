@@ -110,8 +110,7 @@ select {
 }
 
 .site-nav {
-  display: grid;
-  grid-template-columns: auto auto minmax(320px, 1fr) auto auto;
+  display: flex;
   align-items: center;
   gap: 18px;
   min-height: 58px;
@@ -135,6 +134,7 @@ select {
 }
 
 .site-nav__brand {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   min-height: 44px;
@@ -151,18 +151,34 @@ select {
   height: auto;
 }
 
+.site-nav__actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
 .site-nav__links {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 8px;
   position: relative;
   z-index: 14;
+  flex: 0 0 auto;
 }
 
 .site-nav__search {
-  max-width: 420px;
-  justify-self: stretch;
+  flex: 1 1 420px;
+  min-width: 280px;
+  max-width: 560px;
+}
+
+.topbar__profile {
+  flex: 0 0 auto;
 }
 
 .site-nav__link,
@@ -245,6 +261,7 @@ select {
 }
 
 .site-nav__contact {
+  flex: 0 0 auto;
   color: #fff;
   background: linear-gradient(135deg, #281a2d, #1a1323);
   box-shadow: 0 12px 24px rgba(24, 19, 35, 0.24);
@@ -1369,8 +1386,12 @@ select {
 
 @media (max-width: 1220px) {
   .site-nav {
-    grid-template-columns: 1fr;
-    justify-items: center;
+    flex-wrap: wrap;
+  }
+
+  .site-nav__actions {
+    width: 100%;
+    margin-left: 0;
   }
 
   .site-nav__links {
@@ -1437,22 +1458,53 @@ select {
 
   .site-nav {
     padding: 12px;
-    justify-items: stretch;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
   }
 
-  .site-nav__brand,
-  .site-nav__contact,
-  .site-nav__search {
-    justify-content: center;
+  .site-nav__actions {
     width: 100%;
+    margin-left: 0;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: space-between;
   }
 
   .site-nav__links {
-    justify-content: center;
+    display: none;
+  }
+
+  .site-nav__contact {
+    display: none;
+  }
+
+  .site-nav__brand {
+    width: fit-content;
+  }
+
+  .site-nav__search {
+    order: 2;
+    flex: 1 1 100%;
+    max-width: none;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .topbar__profile {
+    order: 1;
+    width: auto;
+    justify-content: flex-end;
+  }
+
+  .site-nav__contact {
+    order: 1;
+    margin-left: auto;
   }
 
   .topbar h1 {
-    font-size: 2.8rem;
+    font-size: 2.2rem;
+    line-height: 0.95;
   }
 
   .promo-strip {
@@ -1460,7 +1512,36 @@ select {
   }
 
   .results-board {
-    padding: 12px;
+    padding: 10px;
+  }
+
+  .promo-card {
+    min-height: 92px;
+    padding: 12px 12px 10px;
+  }
+
+  .promo-card p {
+    font-size: 10px;
+    line-height: 1.22;
+  }
+
+  .promo-card__cta {
+    min-height: 30px;
+    padding: 0 10px;
+  }
+
+  .results-toolbar {
+    gap: 10px;
+  }
+
+  .results-toolbar__sort {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .sort-chip {
+    min-height: 28px;
+    padding: 0 9px;
   }
 
   .trip-card__top,
@@ -1504,15 +1585,88 @@ select {
     font-size: 1.35rem;
   }
 
+  .filters {
+    padding: 12px;
+    border-radius: 24px;
+  }
+
+  .filter-group select {
+    min-height: 48px;
+    padding: 0 14px;
+  }
+
+  .range-meta {
+    font-size: 11px;
+  }
+
+  .layout {
+    gap: 12px;
+  }
+
   .trip-locations,
   .booking-summary-grid,
-  .booking-progress,
   .success-modal__grid {
     grid-template-columns: 1fr;
   }
 
   .booking-panel {
+    width: 100%;
+    max-height: 100vh;
     padding: 12px;
+    gap: 10px;
+    border-top-left-radius: 24px;
+    border-top-right-radius: 24px;
+  }
+
+  .booking-panel__header h2 {
+    font-size: 1.45rem;
+  }
+
+  .booking-progress {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .booking-progress__step {
+    padding: 6px 4px;
+    border-radius: 14px;
+  }
+
+  .booking-progress__step span {
+    width: 24px;
+    height: 24px;
+  }
+
+  .booking-card {
+    gap: 8px;
+  }
+
+  .booking-card__route strong {
+    font-size: 1.05rem;
+  }
+
+  .booking-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+  }
+
+  .booking-stage__head h3 {
+    font-size: 1rem;
+    line-height: 1.12;
+  }
+
+  .booking-stage__head p {
+    font-size: 0.92rem;
+  }
+
+  .booking-actions {
+    flex-direction: column;
+  }
+
+  .booking-actions button {
+    width: 100%;
+    justify-content: center;
   }
 
   .success-modal {
@@ -1520,10 +1674,12 @@ select {
   }
 
   .success-modal__card {
-    padding: 24px 18px 18px;
+    width: 100%;
+    padding: 20px 16px 16px;
+    border-radius: 22px;
   }
 
   .success-modal__copy h2 {
-    font-size: 1.7rem;
+    font-size: 1.55rem;
   }
 }

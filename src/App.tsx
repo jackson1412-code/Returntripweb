@@ -911,65 +911,67 @@ function App() {
         <div className="site-nav__brand">
           <img className="site-nav__logo" src={rootCabsLogo} alt="Root Cabs" />
         </div>
-        <nav className="site-nav__links" aria-label="Primary navigation">
-          {NAV_LINKS.map((link) => (
-            link.dropdown ? (
-              <div key={link.label} className={`site-nav__dropdown${cabCitiesOpen ? ' is-open' : ''}`}>
+        <div className="site-nav__actions">
+          <label className="searchbox site-nav__search">
+            <Search size={18} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search city, driver, cab" />
+          </label>
+          <nav className="site-nav__links" aria-label="Primary navigation">
+            {NAV_LINKS.map((link) => (
+              link.dropdown ? (
+                <div key={link.label} className={`site-nav__dropdown${cabCitiesOpen ? ' is-open' : ''}`}>
+                  <button
+                    type="button"
+                    className={`site-nav__link${link.active ? ' is-active' : ''}`}
+                    aria-expanded={cabCitiesOpen}
+                    aria-haspopup="menu"
+                    onClick={() => setCabCitiesOpen((current) => !current)}
+                  >
+                    <span>{link.label}</span>
+                    <ChevronRight size={14} className="site-nav__caret" />
+                  </button>
+                  {cabCitiesOpen ? (
+                    <div className="site-nav__dropdown-menu" role="menu" aria-label="Cab cities">
+                      {CAB_CITY_LINKS.map((city) => (
+                        <a
+                          key={city.label}
+                          className="site-nav__dropdown-item"
+                          role="menuitem"
+                          href={city.href}
+                          onClick={() => setCabCitiesOpen(false)}
+                        >
+                          {city.label}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
                 <button
+                  key={link.label}
                   type="button"
                   className={`site-nav__link${link.active ? ' is-active' : ''}`}
-                  aria-expanded={cabCitiesOpen}
-                  aria-haspopup="menu"
-                  onClick={() => setCabCitiesOpen((current) => !current)}
+                  onClick={() => {
+                    if (link.href) {
+                      window.location.href = link.href;
+                    }
+                  }}
                 >
                   <span>{link.label}</span>
-                  <ChevronRight size={14} className="site-nav__caret" />
                 </button>
-                {cabCitiesOpen ? (
-                  <div className="site-nav__dropdown-menu" role="menu" aria-label="Cab cities">
-                    {CAB_CITY_LINKS.map((city) => (
-                      <a
-                        key={city.label}
-                        className="site-nav__dropdown-item"
-                        role="menuitem"
-                        href={city.href}
-                        onClick={() => setCabCitiesOpen(false)}
-                      >
-                        {city.label}
-                      </a>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <button
-                key={link.label}
-                type="button"
-                className={`site-nav__link${link.active ? ' is-active' : ''}`}
-                onClick={() => {
-                  if (link.href) {
-                    window.location.href = link.href;
-                  }
-                }}
-              >
-                <span>{link.label}</span>
+              )
+            ))}
+          </nav>
+          {customerSession ? (
+            <div className="topbar__profile">
+              <button className="profile-chip" type="button" onClick={() => setProfileOpen((current) => !current)}>
+                <UserRound size={16} />
+                <span>{customerSession.name || formatPhonePreview(customerSession.phoneNumber)}</span>
               </button>
-            )
-          ))}
-        </nav>
-        <label className="searchbox site-nav__search">
-          <Search size={18} />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search city, driver, cab" />
-        </label>
-        {customerSession ? (
-          <div className="topbar__profile">
-            <button className="profile-chip" type="button" onClick={() => setProfileOpen((current) => !current)}>
-              <UserRound size={16} />
-              <span>{customerSession.name || formatPhonePreview(customerSession.phoneNumber)}</span>
-            </button>
-          </div>
-        ) : null}
-        <button type="button" className="site-nav__contact">Contact Us</button>
+            </div>
+          ) : null}
+          <button type="button" className="site-nav__contact">Contact Us</button>
+        </div>
       </header>
 
       {customerSession && profileOpen ? (
