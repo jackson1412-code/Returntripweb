@@ -46,6 +46,8 @@ export type ReturnTrip = {
   estimatedMin?: number | null;
   expiresAt?: string | null;
   status?: string | null;
+  supportReviewPending?: boolean;
+  notificationType?: string | null;
   minutesToExpiry?: number | null;
   created_at?: string | null;
   zone?: string | null;
@@ -94,5 +96,34 @@ export type ReturnTripAvailableEvent = {
   createdReturnTripId?: number | string | null;
   trip?: ReturnTrip | null;
   reason?: string;
+  ts?: number;
+};
+
+export type ReturnTripStatusChangedEvent = {
+  eventType?: string;
+  returnTripId?: number | string | null;
+  tripId?: number | string | null;
+  status?: string | null;
+  bookingState?: string | null;
+  bookingId?: number | string | null;
+  driverId?: number | string | null;
+  pendingRequest?: unknown;
+  pendingResponse?: {
+    response?: string | null;
+    reason?: string | null;
+    [key: string]: unknown;
+  } | null;
+  supportReviewPending?: boolean;
+  notificationType?: string | null;
+  linkedBooking?: {
+    id?: number | string;
+    bookingNumber?: string | null;
+    bookingReference?: string | null;
+    status?: string | null;
+    [key: string]: unknown;
+  } | null;
+  Driver?: ReturnTrip['Driver'];
+  cabSnapshot?: ReturnTrip['cabSnapshot'];
+  trip?: ReturnTrip | null;
   ts?: number;
 };

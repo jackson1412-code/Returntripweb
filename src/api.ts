@@ -1,4 +1,4 @@
-import type { ApiResponse, ReturnTrip, ReturnTripAvailableEvent, ReturnTripUnavailableEvent } from './types';
+import type { ApiResponse, ReturnTrip, ReturnTripAvailableEvent, ReturnTripStatusChangedEvent, ReturnTripUnavailableEvent } from './types';
 
 //const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://t264m53j-3000.inc1.devtunnels.ms';
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://sit.api.c4d.smartapis.cyou';
@@ -170,6 +170,57 @@ const normalizeAvailableEvent = (payload: unknown): ReturnTripAvailableEvent | n
   };
 };
 
+const normalizeStatusChangedEvent = (payload: unknown): ReturnTripStatusChangedEvent | null => {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const source = payload as {
+    eventType?: string;
+    returnTripId?: number | string | null;
+    tripId?: number | string | null;
+    status?: string | null;
+    bookingState?: string | null;
+    bookingId?: number | string | null;
+    driverId?: number | string | null;
+    pendingRequest?: unknown;
+    pendingResponse?: {
+      response?: string | null;
+      reason?: string | null;
+      [key: string]: unknown;
+    } | null;
+    supportReviewPending?: boolean;
+    notificationType?: string | null;
+    linkedBooking?: ReturnTripStatusChangedEvent['linkedBooking'];
+    Driver?: ReturnTrip['Driver'];
+    cabSnapshot?: ReturnTrip['cabSnapshot'];
+    trip?: ReturnTrip | null;
+    ts?: number;
+    data?: unknown;
+  };
+
+  if (source.data !== undefined) {
+    return normalizeStatusChangedEvent(source.data);
+  }
+
+  return {
+    eventType: source.eventType,
+    returnTripId: source.returnTripId ?? source.tripId ?? source.trip?.id ?? null,
+    tripId: source.tripId ?? source.returnTripId ?? source.trip?.id ?? null,
+    status: source.status ?? source.trip?.status ?? null,
+    bookingState: source.bookingState ?? source.trip?.bookingState ?? null,
+    bookingId: source.bookingId ?? source.trip?.bookingId ?? null,
+    driverId: source.driverId ?? source.trip?.driverId ?? null,
+    pendingRequest: source.pendingRequest ?? source.trip?.pendingRequest,
+    pendingResponse: source.pendingResponse ?? source.trip?.pendingResponse ?? null,
+    supportReviewPending: source.supportReviewPending ?? source.trip?.supportReviewPending ?? false,
+    notificationType: source.notificationType ?? source.trip?.notificationType ?? null,
+    linkedBooking: source.linkedBooking ?? source.trip?.linkedBooking ?? null,
+    Driver: source.Driver ?? source.trip?.Driver ?? null,
+    cabSnapshot: source.cabSnapshot ?? source.trip?.cabSnapshot ?? null,
+    trip: source.trip ?? null,
+    ts: source.ts,
+  };
+};
+
 async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: options.method || 'GET',
@@ -223,6 +274,7 @@ export async function loadReturnTrip(tripId: number | string): Promise<ReturnTri
 export function subscribeReturnTripUnavailable(
   onUnavailable: (event: ReturnTripUnavailableEvent) => void,
   onAvailable?: (event: ReturnTripAvailableEvent) => void,
+  onStatusChanged?: (event: ReturnTripStatusChangedEvent) => void,
   onConnectionError?: (error: Event) => void,
 ) {
   if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
@@ -249,6 +301,23 @@ export function subscribeReturnTripUnavailable(
     ) {
       console.info(`${SSE_DEBUG_PREFIX} parsed available event`, availableEvent);
       onAvailable?.(availableEvent);
+      return;
+    }
+
+    const statusChangedEvent = normalizeStatusChangedEvent(payload);
+    if (
+      statusChangedEvent &&
+      (
+        statusChangedEvent.returnTripId !== null ||
+        statusChangedEvent.tripId !== null ||
+        statusChangedEvent.bookingId !== null ||
+        statusChangedEvent.status !== null ||
+        statusChangedEvent.bookingState !== null
+      ) &&
+      (statusChangedEvent.eventType === 'return_trip_status_changed' || statusChangedEvent.status !== null || statusChangedEvent.bookingState !== null)
+    ) {
+      console.info(`${SSE_DEBUG_PREFIX} parsed status change event`, statusChangedEvent);
+      onStatusChanged?.(statusChangedEvent);
       return;
     }
 
@@ -287,6 +356,15 @@ export function subscribeReturnTripUnavailable(
     }
   };
 
+  const handleStatusChangedMessage = (event: MessageEvent<string>) => {
+    try {
+      console.debug(`${SSE_DEBUG_PREFIX} named event return_trip_status_changed`, event.data);
+      dispatchParsedPayload(JSON.parse(event.data));
+    } catch {
+      console.warn(`${SSE_DEBUG_PREFIX} failed to parse return_trip_status_changed payload`, event.data);
+    }
+  };
+
   const handleGenericMessage = (event: MessageEvent<string>) => {
     try {
       console.debug(`${SSE_DEBUG_PREFIX} generic message`, event.data);
@@ -303,6 +381,7 @@ export function subscribeReturnTripUnavailable(
   stream.addEventListener('return_trip_unavailable', handleUnavailableMessage as EventListener);
   stream.addEventListener('return_trip_available', handleAvailableMessage as EventListener);
   stream.addEventListener('return_trip_created', handleAvailableMessage as EventListener);
+  stream.addEventListener('return_trip_status_changed', handleStatusChangedMessage as EventListener);
   stream.addEventListener('message', handleGenericMessage as EventListener);
   stream.addEventListener('open', handleOpen as EventListener);
   stream.onerror = (error) => {
@@ -314,6 +393,7 @@ export function subscribeReturnTripUnavailable(
     stream.removeEventListener('return_trip_unavailable', handleUnavailableMessage as EventListener);
     stream.removeEventListener('return_trip_available', handleAvailableMessage as EventListener);
     stream.removeEventListener('return_trip_created', handleAvailableMessage as EventListener);
+    stream.removeEventListener('return_trip_status_changed', handleStatusChangedMessage as EventListener);
     stream.removeEventListener('message', handleGenericMessage as EventListener);
     stream.removeEventListener('open', handleOpen as EventListener);
     console.info(`${SSE_DEBUG_PREFIX} stream closed`);
