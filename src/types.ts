@@ -19,6 +19,17 @@ export type ReturnTrip = {
   bookingId?: number | string | null;
   bookingState?: string | null;
   pendingRequest?: unknown;
+  pendingResponse?: {
+    response?: string | null;
+    reason?: string | null;
+    [key: string]: unknown;
+  } | null;
+  linkedBooking?: {
+    id?: number | string;
+    bookingReference?: string | null;
+    status?: string | null;
+    [key: string]: unknown;
+  } | null;
   pickupLocation?: unknown;
   pickupLat?: number | null;
   pickupLong?: number | null;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -23,7 +23,6 @@ import rootCabsLogo from './assets/rootcabs-logo.svg';
 import {
   ApiRequestError,
   bookReturnTrip,
-  loadReturnTrip,
   loadReturnTrips,
   lookupCustomer,
   registerCustomer,
@@ -53,11 +52,11 @@ type SessionBookingState = {
   fare: string;
   driver: string;
   bookedAt: string;
-  phase: 'pending' | 'confirmed';
+  phase: 'pending' | 'support' | 'confirmed';
 };
 
 type BookingRequestState = {
-  phase: 'pending' | 'confirmed' | 'rejected' | 'expired' | 'error';
+  phase: 'pending' | 'confirmed' | 'rejected' | 'support' | 'error';
   tripId: number | string;
   bookingReference: string;
   customerName: string;
@@ -98,15 +97,20 @@ const formatRating = (value: unknown) => {
   return num.toFixed(1);
 };
 
-const formatTimeLeft = (value?: string | null) => {
+const formatTimeLeft = (value?: string | null, now = Date.now()) => {
   if (!value) return 'No expiry set';
   const expiresAt = new Date(value).getTime();
-  const remaining = expiresAt - Date.now();
-  if (remaining <= 0) return 'Expired';
-  const hours = Math.floor(remaining / (60 * 60 * 1000));
-  const minutes = Math.ceil((remaining % (60 * 60 * 1000)) / (60 * 1000));
-  if (hours <= 0) return `${minutes} min left`;
-  return `${hours}h ${minutes}m left`;
+  const remaining = expiresAt - now;
+  if (remaining <= 0) return 'Ending now';
+  const totalSeconds = Math.floor(remaining / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m ${seconds}s left`;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s left`;
+  if (minutes > 0) return `${minutes}m ${seconds}s left`;
+  return `${seconds}s left`;
 };
 
 const normalize = (value: unknown) => String(value || '').trim().toLowerCase();
@@ -149,6 +153,13 @@ const formatPhonePreview = (value: string) => {
 };
 
 const getTripFareValue = (trip: ReturnTrip) => trip.driverOfferPrice ?? trip.finalPrice;
+
+const getBookingReference = (booking: { id?: number | string; bookingReference?: string | null } | null | undefined) => {
+  if (!booking) return '';
+  if (booking.bookingReference) return booking.bookingReference;
+  if (booking.id !== null && booking.id !== undefined) return String(booking.id);
+  return '';
+};
 
 const NAV_LINKS = [
   { label: 'Home', active: true },
@@ -227,63 +238,95 @@ const BookingProgress = ({ step }: { step: BookingStep }) => {
   const resolvedIndex = step === 'success' ? steps.length - 1 : activeIndex;
 
   return (
-    <div className="booking-progress">
+    <div className="booking-progress" aria-label="Booking progress">
       {steps.map((item, index) => {
         const isDone = index < resolvedIndex || step === 'success';
         const isActive = index === resolvedIndex && step !== 'success';
         return (
-          <div
-            key={item.id}
-            className={`booking-progress__step${isDone ? ' is-done' : ''}${isActive ? ' is-active' : ''}`}
-            aria-label={`${index + 1}. ${item.label}`}
-            title={item.label}
-          >
-            <span>{index + 1}</span>
-          </div>
+          <Fragment key={item.id}>
+            <div
+              className={`booking-progress__step${isDone ? ' is-done' : ''}${isActive ? ' is-active' : ''}`}
+              aria-label={`${index + 1}. ${item.label}`}
+              title={item.label}
+            >
+              <span>{index + 1}</span>
+            </div>
+            {index < steps.length - 1 ? <ChevronRight size={16} className="booking-progress__arrow" aria-hidden="true" /> : null}
+          </Fragment>
         );
       })}
     </div>
   );
 };
 
-const TripCard = ({ trip, onBook }: { trip: ReturnTrip; onBook: (trip: ReturnTrip) => void }) => {
+const TripCard = ({ trip, onBook, now }: { trip: ReturnTrip; onBook: (trip: ReturnTrip) => void; now: number }) => {
   const driverName = [trip.Driver?.firstName, trip.Driver?.lastName].filter(Boolean).join(' ') || 'Driver';
   const pickup = trip.pickupFormatAddress?.formattedAddress || trip.pickupCity || '-';
   const drop = trip.dropFormatAddress?.formattedAddress || trip.destinationCity || '-';
-  const rating = formatRating(trip.driverRating ?? trip.Driver?.rating);
+  const ratingValue = Number(trip.driverRating ?? trip.Driver?.rating ?? 0);
+  const rating = formatRating(ratingValue);
+  const ratingTone = ratingValue >= 4.5 ? 'excellent' : ratingValue >= 4.0 ? 'good' : ratingValue >= 3.5 ? 'fair' : 'low';
   const cabLabel = [trip.cabSnapshot?.carType || trip.driverCarType, trip.cabSnapshot?.vehicleType]
     .filter(Boolean)
     .join(' / ');
+  const countdown = formatTimeLeft(trip.expiresAt, now);
+  const expiresAt = trip.expiresAt ? new Date(trip.expiresAt).getTime() : null;
+  const isUrgent = expiresAt !== null ? expiresAt - now <= 60 * 60 * 1000 : false;
+  const fareValue = Number(getTripFareValue(trip) || 0);
+  const savingsValue = Number(trip.discountAmount || 0);
+  const originalFareValue = fareValue + savingsValue;
+  const discountPercent = originalFareValue > 0 && savingsValue > 0 ? Math.round((savingsValue / originalFareValue) * 100) : 0;
 
   return (
     <article className="trip-card">
       <div className="trip-card__top">
         <div className="trip-card__route-block">
           <div className="trip-card__route-head">
-            <span className="route-tag route-tag--from">FROM</span>
-            <span className="route-tag route-tag--to">TO</span>
+            <div className="trip-card__route-tags">
+              <span className="route-tag route-tag--from">FROM</span>
+              <span className="route-tag route-tag--to">TO</span>
+            </div>
+            <div className="trip-card__top-meta">
+              <span className={`pill pill--rating pill--rating--${ratingTone}`}>
+                <Star size={14} />
+                {rating}
+              </span>
+              <span className="pill pill--car">
+                <CarFront size={14} />
+                {cabLabel || 'Cab details'}
+              </span>
+            </div>
+            <div className="trip-card__route-spacer" aria-hidden="true" />
           </div>
           <div className="trip-card__route">
             <h3 className="trip-card__city trip-card__city--from">{trip.pickupCity || 'Pickup'}</h3>
             <ArrowRight size={16} />
             <h3 className="trip-card__city trip-card__city--to">{trip.destinationCity || 'Drop'}</h3>
           </div>
-          <p className="trip-card__driver">by {driverName}</p>
+          <p className="trip-card__driver">by {driverName} - {trip.zone || trip.pickupCity || 'Zone not set'}</p>
         </div>
 
-        <div className="trip-card__price">
-          <span className="trip-card__price-label">Fare</span>
-          <strong>
+        <div className="trip-card__price trip-card__price--deal">
+          {savingsValue > 0 ? (
+            <span className="trip-card__price-savings">
+              <BadgeIndianRupee size={12} />
+              Rs. {formatMoney(savingsValue)} applied
+            </span>
+          ) : null}
+          <div className="trip-card__price-original-row">
+            {savingsValue > 0 ? (
+              <span className="trip-card__price-original">
+                <BadgeIndianRupee size={14} />
+                {formatMoney(originalFareValue)}
+              </span>
+            ) : null}
+            {discountPercent > 0 ? <span className="trip-card__price-discount">-{discountPercent}%</span> : null}
+          </div>
+          <strong className="trip-card__price-final">
             <BadgeIndianRupee size={16} />
-            {formatMoney(getTripFareValue(trip))}
+            <span>{formatMoney(fareValue)}</span>
           </strong>
         </div>
-      </div>
-
-      <div className="trip-meta">
-        <span className="pill"><Star size={14} /> {rating}</span>
-        <span className="pill"><CarFront size={14} /> {cabLabel || 'Cab details'}</span>
-        <span className="pill"><TimerReset size={14} /> {formatTimeLeft(trip.expiresAt)}</span>
       </div>
 
       <div className="trip-card__body">
@@ -310,16 +353,20 @@ const TripCard = ({ trip, onBook }: { trip: ReturnTrip; onBook: (trip: ReturnTri
           <span><WalletCards size={14} /> Save {formatMoney(trip.discountAmount)}</span>
         </div>
 
-        <button className="ghost-btn" type="button" onClick={() => onBook(trip)}>
-          Book Now
-          <ArrowRight size={16} />
-        </button>
+        <div className="trip-card__actions">
+          <span className={`pill pill--danger${isUrgent ? ' pill--danger--pulse' : ''}`}><TimerReset size={14} /> {countdown}</span>
+          <button className="ghost-btn" type="button" onClick={() => onBook(trip)}>
+            Book Now
+            <ArrowRight size={16} />
+          </button>
+        </div>
       </div>
     </article>
   );
 };
 
 function App() {
+  const [now, setNow] = useState(() => Date.now());
   const [trips, setTrips] = useState<ReturnTrip[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -357,6 +404,26 @@ function App() {
     welcomeBackMessage: '',
   });
   const [otpCode, setOtpCode] = useState('');
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -448,7 +515,7 @@ function App() {
     setSessionBookings((current) => [
       {
         tripId: snapshot.tripId,
-        bookingReference: snapshot.bookingReference || (snapshot.phase === 'pending' ? 'Pending' : 'Confirmed'),
+        bookingReference: snapshot.bookingReference || (snapshot.phase === 'confirmed' ? 'Confirmed' : 'Reserved'),
         customerName: snapshot.customerName,
         phoneNumber: snapshot.phoneNumber,
         route: snapshot.route,
@@ -464,116 +531,6 @@ function App() {
   const removeSessionBooking = useCallback((tripId: number | string) => {
     setSessionBookings((current) => current.filter((item) => String(item.tripId) !== String(tripId)));
   }, []);
-
-  useEffect(() => {
-    if (!bookingRequestState || bookingRequestState.phase !== 'pending') return;
-
-    let active = true;
-
-    const pollBookingStatus = async () => {
-      try {
-        const trip = await loadReturnTrip(bookingRequestState.tripId);
-        if (!active || !trip) return;
-
-        console.info(`${UI_DEBUG_PREFIX} polled trip status`, {
-          tripId: bookingRequestState.tripId,
-          status: trip.status,
-          bookingState: trip.bookingState,
-          pendingRequest: trip.pendingRequest,
-        });
-
-        if (trip.bookingState === 'PENDING' || trip.pendingRequest) {
-          setBookingRequestState((current) => (
-            current && current.phase === 'pending'
-              ? {
-                ...current,
-                pendingRequest: trip.pendingRequest,
-                status: trip.status ?? null,
-                bookingState: trip.bookingState ?? null,
-              }
-              : current
-          ));
-          return;
-        }
-
-        if (trip.bookingState === 'BOOKED' || trip.status === 'BOOKED') {
-          const currentReference = bookingRequestState.bookingReference?.trim();
-          const resolvedReference = currentReference && currentReference.toLowerCase() !== 'pending'
-            ? currentReference
-            : String(trip.bookingId || 'Confirmed');
-          const next = {
-            ...bookingRequestState,
-            phase: 'confirmed' as const,
-            bookingReference: resolvedReference,
-            status: trip.status ?? null,
-            bookingState: trip.bookingState ?? null,
-          };
-          setBookingRequestState(next);
-          upsertSessionBooking(next);
-          void refreshTrips().catch(() => undefined);
-          return;
-        }
-
-        if (trip.status === 'EXPIRED') {
-          setBookingRequestState((current) => (
-            current
-              ? {
-                ...current,
-                phase: 'expired',
-                status: trip.status ?? null,
-                bookingState: trip.bookingState ?? null,
-                pendingRequest: trip.pendingRequest,
-              }
-              : current
-          ));
-          removeSessionBooking(bookingRequestState.tripId);
-          void refreshTrips().catch(() => undefined);
-          return;
-        }
-
-        if (trip.status === 'ACTIVE' && !trip.pendingRequest) {
-          setBookingRequestState((current) => (
-            current
-              ? {
-                ...current,
-                phase: 'rejected',
-                status: trip.status ?? null,
-                bookingState: trip.bookingState ?? null,
-                pendingRequest: trip.pendingRequest,
-              }
-              : current
-          ));
-          removeSessionBooking(bookingRequestState.tripId);
-          void refreshTrips().catch(() => undefined);
-          return;
-        }
-
-        setBookingRequestState((current) => (
-          current
-            ? {
-              ...current,
-              phase: 'error',
-              status: trip.status ?? null,
-              bookingState: trip.bookingState ?? null,
-              pendingRequest: trip.pendingRequest,
-            }
-            : current
-        ));
-      } catch (err) {
-        console.warn(`${UI_DEBUG_PREFIX} failed to poll booking status`, err);
-      }
-    };
-
-    void pollBookingStatus();
-    const intervalId = window.setInterval(() => {
-      void pollBookingStatus();
-    }, 5000);
-
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
-  }, [bookingRequestState, refreshTrips, removeSessionBooking, upsertSessionBooking]);
 
   const cityOptions = useMemo(() => {
     const pickups = Array.from(new Set(trips.map((trip) => trip.pickupCity).filter(Boolean) as string[]));
@@ -734,7 +691,7 @@ function App() {
       const verification = await verifyCustomerOtp(otpCode, sid, deviceToken, deviceId);
       if (verification.requiresDeviceOverride) {
         setSessionConflict({
-          message: verification.message || 'This phone number is signed in on another device. Continue here and sign out the other session?',
+          message: 'This phone number is already being used elsewhere. Would you like to continue here?',
           confirmAction: async () => {
             setBookingBusy(true);
             setBookingError(null);
@@ -779,16 +736,19 @@ function App() {
     setBookingBusy(true);
     setBookingError(null);
     try {
-      const requestedTripId = selectedTrip.id;
       const firstName = customerDraft.name.trim();
       const requestSnapshot = {
-        tripId: requestedTripId,
+        tripId: selectedTrip.id,
         customerName: firstName || 'Customer',
         phoneNumber: formatPhonePreview(customerDraft.phoneNumber),
         route: `${selectedTrip.pickupCity || 'Pickup'} -> ${selectedTrip.destinationCity || 'Drop'}`,
         fare: `Rs ${formatMoney(getTripFareValue(selectedTrip))}`,
         driver: selectedTripDriver,
-        bookingReference: '',
+        bookingReference: 'Pending',
+        pendingRequest: selectedTrip.pendingRequest,
+        status: selectedTrip.status ?? null,
+        bookingState: selectedTrip.bookingState ?? null,
+        phase: 'pending' as const,
       };
       if (customerDraft.needsName) {
         await registerCustomer(firstName, toIndianPhone(customerDraft.phoneNumber), sid);
@@ -800,66 +760,41 @@ function App() {
         toIndianPhone(customerDraft.phoneNumber),
         sid,
       ) as {
-        bookingState?: string;
-        pendingRequest?: unknown;
-        booking?: { id?: string | number };
         data?: {
-          bookingState?: string;
+          linkedBooking?: { id?: string | number; bookingReference?: string | null } | null;
+          bookingReference?: string | null;
           pendingRequest?: unknown;
-          booking?: { id?: string | number };
+          returnTrip?: {
+            linkedBooking?: { id?: string | number; bookingReference?: string | null } | null;
+            pendingRequest?: unknown;
+          } | null;
         };
+        booking?: { id?: string | number };
+        linkedBooking?: { id?: string | number; bookingReference?: string | null } | null;
+        bookingReference?: string | null;
+        returnTrip?: {
+          linkedBooking?: { id?: string | number; bookingReference?: string | null } | null;
+          pendingRequest?: unknown;
+        } | null;
       };
 
       const data = bookingResponse?.data || bookingResponse;
       const responseTrip = data?.returnTrip || bookingResponse?.returnTrip;
-      const bookingId = data?.booking?.id || bookingResponse?.booking?.id;
-      const bookingState = data?.bookingState || data?.status || responseTrip?.bookingState || responseTrip?.status || null;
-      const pendingRequest = data?.pendingRequest || responseTrip?.pendingRequest || null;
-      const status = data?.status || responseTrip?.status || null;
-      const isPending = bookingState === 'PENDING' || Boolean(pendingRequest);
-      const isBooked = bookingState === 'BOOKED';
-      const isExpired = status === 'EXPIRED' || bookingState === 'EXPIRED';
-
-      setTrips((current) => current.filter((trip) => String(trip.id) !== String(requestedTripId)));
-      closeBooking();
-      setBookingReference(bookingId ? String(bookingId) : '');
-      setCustomerSession((current) => current ? { ...current, name: requestSnapshot.customerName } : current);
-      setBookingRequestState({
+      const linkedBooking = data?.linkedBooking || responseTrip?.linkedBooking || data?.booking || bookingResponse?.booking || bookingResponse?.linkedBooking || null;
+      const bookingReferenceFromResponse = getBookingReference(linkedBooking) || data?.bookingReference || bookingResponse?.bookingReference || "";
+      const pendingRequest = data?.pendingRequest || responseTrip?.pendingRequest || selectedTrip.pendingRequest || null;
+      const nextBooking: BookingRequestState = {
         ...requestSnapshot,
-        bookingReference: bookingId ? String(bookingId) : (isPending ? 'Pending' : ''),
+        bookingReference: bookingReferenceFromResponse || requestSnapshot.bookingReference,
         pendingRequest,
-        status,
-        bookingState,
-        phase: isBooked ? 'confirmed' : isPending ? 'pending' : isExpired ? 'expired' : 'error',
-      });
-      if (isPending) {
-        upsertSessionBooking({
-          ...requestSnapshot,
-          bookingReference: bookingId ? String(bookingId) : 'Pending',
-          pendingRequest,
-          status,
-          bookingState,
-          phase: 'pending',
-        });
-      }
-      if (isBooked) {
-        upsertSessionBooking({
-          ...requestSnapshot,
-          bookingReference: bookingId ? String(bookingId) : 'Confirmed',
-          phase: 'confirmed',
-        });
-      }
-      try {
-        await refreshTrips();
-      } catch {
-        setPageNotice(
-          isPending
-            ? 'Your booking request is waiting for driver response. Availability will refresh on the next reload.'
-            : isBooked
-              ? 'Return trip booking is confirmed. Availability will refresh on the next reload.'
-              : 'Return trip status changed. Availability will refresh on the next reload.',
-        );
-      }
+      };
+
+      setBookingRequestState(nextBooking);
+      upsertSessionBooking(nextBooking);
+      setBookingReference(bookingReferenceFromResponse || "");
+      setCustomerSession((current) => current ? { ...current, name: nextBooking.customerName } : current);
+      closeBooking();
+      void refreshTrips().catch(() => undefined);
     } catch (err) {
       if (err instanceof ApiRequestError && err.status === 409) {
         closeBooking();
@@ -873,7 +808,6 @@ function App() {
       setBookingBusy(false);
     }
   };
-
   const startAnotherBooking = () => {
     closeBooking();
   };
@@ -897,13 +831,13 @@ function App() {
   };
 
   useEffect(() => {
-    if (!selectedTrip) return;
+    if (!selectedTrip || bookingBusy || bookingRequestState) return;
     const selectedTripStillVisible = trips.some((trip) => String(trip.id) === String(selectedTrip.id));
     if (!selectedTripStillVisible) {
       closeBooking();
       setPageNotice('This return trip is no longer available.');
     }
-  }, [selectedTrip, trips]);
+  }, [selectedTrip, trips, bookingBusy, bookingRequestState]);
 
   return (
     <div className={`page-shell${selectedTrip || bookingRequestState || profileView ? ' page-shell--booking-open' : ''}`}>
@@ -1017,6 +951,11 @@ function App() {
             <Filter size={18} />
             <h2>Filters</h2>
           </div>
+
+          <button className="filters__action filters__action--top" type="button" onClick={() => setProfileView('upcoming')}>
+            <span>Upcoming trips</span>
+            <strong>{upcomingSessionBookings.length}</strong>
+          </button>
 
           <section className="filter-group">
             <label>Pickup city</label>
@@ -1137,7 +1076,7 @@ function App() {
             ) : loading
               ? Array.from({ length: 4 }).map((_, index) => <div className="skeleton-card" key={index} />)
               : filteredTrips.length
-                ? filteredTrips.map((trip) => <TripCard key={trip.id} trip={trip} onBook={startBooking} />)
+                ? filteredTrips.map((trip) => <TripCard key={trip.id} trip={trip} onBook={startBooking} now={now} />)
                 : (
                   <div className="empty-state">
                     <h3>No return trips match the filters</h3>
@@ -1164,28 +1103,30 @@ function App() {
 
             <BookingProgress step={bookingStep} />
 
-            <section className="booking-card">
-              <div className="booking-card__route">
-                <strong>{selectedTrip.pickupCity || 'Pickup'}</strong>
-                <ChevronRight size={16} />
-                <strong>{selectedTrip.destinationCity || 'Drop'}</strong>
-              </div>
-              <div className="booking-card__meta">
-                <span><CarFront size={14} /> {selectedTrip.cabSnapshot?.vehicleType || selectedTrip.driverCarType || 'Cab ready'}</span>
-                <span><TimerReset size={14} /> {formatTimeLeft(selectedTrip.expiresAt)}</span>
-                <span><BadgeIndianRupee size={14} /> {formatMoney(getTripFareValue(selectedTrip))}</span>
-              </div>
-              <div className="booking-card__addresses">
-                <div>
-                  <label>Pickup</label>
-                  <p>{selectedTripPickup}</p>
+            {bookingStep !== 'otp' ? (
+              <section className="booking-card">
+                <div className="booking-card__route">
+                  <strong>{selectedTrip.pickupCity || 'Pickup'}</strong>
+                  <ChevronRight size={16} />
+                  <strong>{selectedTrip.destinationCity || 'Drop'}</strong>
                 </div>
-                <div>
-                  <label>Drop</label>
-                  <p>{selectedTripDrop}</p>
+                <div className="booking-card__meta">
+                  <span><CarFront size={14} /> {selectedTrip.cabSnapshot?.vehicleType || selectedTrip.driverCarType || 'Cab ready'}</span>
+                  <span><TimerReset size={14} /> {formatTimeLeft(selectedTrip.expiresAt)}</span>
+                  <span><BadgeIndianRupee size={14} /> {formatMoney(getTripFareValue(selectedTrip))}</span>
                 </div>
-              </div>
-            </section>
+                <div className="booking-card__addresses">
+                  <div>
+                    <label>Pickup</label>
+                    <p>{selectedTripPickup}</p>
+                  </div>
+                  <div>
+                    <label>Drop</label>
+                    <p>{selectedTripDrop}</p>
+                  </div>
+                </div>
+              </section>
+            ) : null}
 
             {bookingError ? (
               <div className="booking-inline-message booking-inline-message--error">
@@ -1202,7 +1143,7 @@ function App() {
             ) : null}
 
             {bookingStep === 'phone' ? (
-              <section className="booking-stage">
+              <section className="booking-stage booking-stage--phone">
                 <div className="booking-stage__head">
                   <Phone size={18} />
                   <div>
@@ -1281,13 +1222,17 @@ function App() {
             ) : null}
 
             {bookingStep === 'otp' ? (
-              <section className="booking-stage">
+              <section className="booking-stage booking-stage--otp">
                 <div className="booking-stage__head">
                   <ShieldCheck size={18} />
                   <div>
                     <h3>Verify OTP before the booking is locked</h3>
-                    <p>An OTP should be sent to {formatPhonePreview(customerDraft.phoneNumber)} for both new and existing customers.</p>
+                    <p>Enter the OTP sent to {formatPhonePreview(customerDraft.phoneNumber)}. This step confirms the rider before the booking is submitted.</p>
                   </div>
+                </div>
+                <div className="booking-inline-message booking-inline-message--otp">
+                  <Sparkles size={16} />
+                  <span>OTP verification is required to continue.</span>
                 </div>
                 <label className="booking-field">
                   <span>OTP code</span>
@@ -1396,30 +1341,28 @@ function App() {
               {bookingRequestState.phase === 'pending' ? <TimerReset size={34} /> : null}
               {bookingRequestState.phase === 'confirmed' ? <CheckCircle2 size={34} /> : null}
               {bookingRequestState.phase === 'rejected' ? <X size={34} /> : null}
-              {bookingRequestState.phase === 'expired' ? <TimerReset size={34} /> : null}
+              {bookingRequestState.phase === 'support' ? <ShieldCheck size={34} /> : null}
               {bookingRequestState.phase === 'error' ? <X size={34} /> : null}
             </div>
             <div className="success-modal__copy">
               <p className="booking-panel__eyebrow">
-                {bookingRequestState.phase === 'pending' ? 'Waiting for Driver Response' : null}
+                {bookingRequestState.phase === 'pending' ? 'Waiting for driver response' : null}
                 {bookingRequestState.phase === 'confirmed' ? 'Booking Confirmed' : null}
                 {bookingRequestState.phase === 'rejected' ? 'Request Rejected' : null}
-                {bookingRequestState.phase === 'expired' ? 'Request Expired' : null}
+                {bookingRequestState.phase === 'support' ? 'Booking Reserved' : null}
                 {bookingRequestState.phase === 'error' ? 'Request Status Unclear' : null}
               </p>
               <h2>
-                {bookingRequestState.phase === 'pending' ? 'Your request is pending' : null}
+                {bookingRequestState.phase === 'pending' ? 'Your booking is reserved' : null}
                 {bookingRequestState.phase === 'confirmed' ? 'Return trip booked successfully' : null}
                 {bookingRequestState.phase === 'rejected' ? 'This trip is available again' : null}
-                {bookingRequestState.phase === 'expired' ? 'This return trip expired' : null}
-                {bookingRequestState.phase === 'error' ? 'We could not confirm this request yet' : null}
+                {bookingRequestState.phase === 'support' ? 'Your request is under review' : null}
               </h2>
               <p>
-                {bookingRequestState.phase === 'pending' ? 'The driver has not responded yet. This screen will update automatically.' : null}
+                {bookingRequestState.phase === 'pending' ? 'Waiting for driver response.' : null}
                 {bookingRequestState.phase === 'confirmed' ? 'The driver accepted the request and the booking is now confirmed.' : null}
                 {bookingRequestState.phase === 'rejected' ? 'The driver did not accept this request. You can close this and try again.' : null}
-                {bookingRequestState.phase === 'expired' ? 'The trip expired before the driver accepted it. Please pick another return trip.' : null}
-                {bookingRequestState.phase === 'error' ? 'The request was created, but confirmation was not returned. Please retry or refresh the trip list.' : null}
+                {bookingRequestState.phase === 'support' ? 'Your request is under review. Customer support will contact you shortly.' : null}
               </p>
             </div>
             <div className="success-modal__grid">
@@ -1468,23 +1411,23 @@ function App() {
               <ShieldCheck size={34} />
             </div>
             <div className="success-modal__copy">
-              <p className="booking-panel__eyebrow">Session already active</p>
-              <h2>Session already active</h2>
+              <p className="booking-panel__eyebrow">Booking already open</p>
+              <h2>Continue this booking?</h2>
               <p>{sessionConflict.message}</p>
             </div>
             <div className="success-modal__actions success-modal__actions--split">
               <button className="ghost-btn ghost-btn--soft" type="button" disabled={bookingBusy} onClick={() => setSessionConflict(null)}>
-                No, keep current
+                Keep current booking
               </button>
               <button className="ghost-btn" type="button" autoFocus disabled={bookingBusy} onClick={() => void sessionConflict.confirmAction()}>
-                {bookingBusy ? 'Continuing...' : 'Yes, continue'}
+                {bookingBusy ? 'Continuing...' : 'Continue here'}
               </button>
             </div>
           </div>
         </div>
       ) : null}
 
-      {customerSession && profileView ? (
+      {profileView ? (
         <div className="success-modal">
           <div className="success-modal__overlay" onClick={() => setProfileView(null)} />
           <div className="success-modal__card profile-screen">
@@ -1495,22 +1438,22 @@ function App() {
               <p className="booking-panel__eyebrow">
                 {profileView === 'profile' ? 'Customer Profile' : 'Upcoming Trips'}
               </p>
-              <h2>{profileView === 'profile' ? (customerSession.name || 'Verified customer') : 'Your upcoming trips'}</h2>
+              <h2>{profileView === 'profile' ? (customerSession?.name || 'Verified customer') : 'Your upcoming trips'}</h2>
             </div>
 
             {profileView === 'profile' ? (
               <div className="success-modal__grid">
                 <div>
                   <label>Name</label>
-                  <p>{customerSession.name || 'Not set'}</p>
+                  <p>{customerSession?.name || 'Not set'}</p>
                 </div>
                 <div>
                   <label>Phone</label>
-                  <p>{formatPhonePreview(customerSession.phoneNumber)}</p>
+                  <p>{customerSession ? formatPhonePreview(customerSession.phoneNumber) : 'Not available'}</p>
                 </div>
                 <div>
                   <label>Customer type</label>
-                  <p>{customerSession.isExistingCustomer ? 'Existing customer' : 'New customer'}</p>
+                  <p>{customerSession?.isExistingCustomer ? 'Existing customer' : 'New customer'}</p>
                 </div>
                 <div>
                   <label>Upcoming trips</label>
@@ -1531,7 +1474,7 @@ function App() {
                     </div>
                     <div>
                       <label>Status</label>
-                      <p>{booking.phase === 'pending' ? 'Waiting for driver' : 'Confirmed'}</p>
+                      <p>{booking.phase === 'confirmed' ? 'Your booking is confirmed' : booking.phase === 'support' ? 'Your request is under review' : 'Waiting for driver response'}</p>
                     </div>
                     <div>
                       <label>Fare</label>
@@ -1564,3 +1507,15 @@ function App() {
 }
 
 export default App;
+
+
+
+
+
+
+
+
+
+
+
+

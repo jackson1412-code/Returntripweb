@@ -104,7 +104,7 @@ export const mockReturnTrips: ReturnTrip[] = [
     finalPrice: 1200,
     discountAmount: 180,
     expiresAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    status: 'EXPIRED',
+    status: 'SUPPORT',
     minutesToExpiry: 0,
     created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
     zone: 'Chennai',
