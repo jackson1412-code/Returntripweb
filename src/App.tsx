@@ -114,6 +114,7 @@ const formatTimeLeft = (value?: string | null, now = Date.now()) => {
 };
 
 const normalize = (value: unknown) => String(value || '').trim().toLowerCase();
+const normalizeTripStatus = (value: unknown) => String(value ?? '').trim().toUpperCase();
 const digitsOnly = (value: string) => value.replace(/\D/g, '').slice(-10);
 const toIndianPhone = (value: string) => `+91${digitsOnly(value)}`;
 
@@ -171,14 +172,6 @@ const resolveBookingPhase = (trip?: Partial<ReturnTrip> & {
   const notificationType = normalizeTripStatus(trip?.notificationType);
   const pendingResponse = normalizeTripStatus(trip?.pendingResponse?.response);
   const supportReviewPending = Boolean(trip?.supportReviewPending);
-  const isConfirmed =
-    status === 'BOOKED' ||
-    bookingState === 'BOOKED' ||
-    Boolean(trip?.bookingId) ||
-    Boolean(trip?.linkedBooking?.id);
-
-  if (isConfirmed) return "confirmed" as const;
-
   const isSupport =
     bookingState === 'SUPPORT' ||
     status === 'SUPPORT' ||
@@ -187,6 +180,12 @@ const resolveBookingPhase = (trip?: Partial<ReturnTrip> & {
     notificationType === 'ASSIGNED_TO_SUPPORT';
 
   if (isSupport) return "support" as const;
+
+  const isConfirmed =
+    status === 'BOOKED' ||
+    bookingState === 'BOOKED';
+
+  if (isConfirmed) return "confirmed" as const;
 
   return "pending" as const;
 };
@@ -415,6 +414,7 @@ function App() {
   const [customerSession, setCustomerSession] = useState<CustomerSessionState | null>(null);
   const [sessionBookings, setSessionBookings] = useState<SessionBookingState[]>([]);
   const tripsRef = useRef<ReturnTrip[]>([]);
+  const bookingRequestStateRef = useRef<BookingRequestState | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [cabCitiesOpen, setCabCitiesOpen] = useState(false);
   const [profileView, setProfileView] = useState<null | 'profile' | 'upcoming'>(null);
@@ -469,6 +469,10 @@ function App() {
   useEffect(() => {
     tripsRef.current = trips;
   }, [trips]);
+  useEffect(() => {
+    bookingRequestStateRef.current = bookingRequestState;
+  }, [bookingRequestState]);
+
 
   useEffect(() => {
     let mounted = true;
@@ -539,9 +543,28 @@ function App() {
       },
       (statusEvent) => {
         if (!mounted) return;
-        const eventTripId = statusEvent.returnTripId ?? statusEvent.tripId ?? statusEvent.bookingId ?? statusEvent.trip?.id ?? null;
+        // bookingId is a separate booking identifier and should not be used as the trip key.
+        // Use returnTripId / tripId / trip.id for routing SSE status updates to the correct return trip.
+        const eventTripId = statusEvent.returnTripId ?? statusEvent.tripId ?? statusEvent.trip?.id ?? null;
         if (eventTripId === null || eventTripId === undefined) return;
-        const currentTrip = statusEvent.trip || tripsRef.current.find((trip) => String(trip.id) === String(eventTripId)) || null;
+        const currentRequest = bookingRequestStateRef.current && String(bookingRequestStateRef.current.tripId) === String(eventTripId) ? bookingRequestStateRef.current : null;
+        const fallbackTrip = currentRequest
+          ? {
+            id: Number(eventTripId) || Number(currentRequest.tripId) || 0,
+            status: currentRequest.status ?? statusEvent.status ?? null,
+            bookingState: currentRequest.bookingState ?? statusEvent.bookingState ?? null,
+            bookingId: statusEvent.bookingId ?? null,
+            driverId: statusEvent.driverId ?? 0,
+            pendingRequest: currentRequest.pendingRequest ?? statusEvent.pendingRequest,
+            pendingResponse: statusEvent.pendingResponse ?? null,
+            supportReviewPending: statusEvent.supportReviewPending ?? currentRequest.phase === 'support',
+            notificationType: statusEvent.notificationType ?? (currentRequest.phase === 'support' ? 'ASSIGNED_TO_SUPPORT' : null),
+            linkedBooking: statusEvent.linkedBooking ?? null,
+            Driver: statusEvent.Driver ?? null,
+            cabSnapshot: statusEvent.cabSnapshot ?? null,
+          }
+          : null;
+        const currentTrip = statusEvent.trip || tripsRef.current.find((trip) => String(trip.id) === String(eventTripId)) || fallbackTrip || null;
         const mergedTrip = currentTrip
           ? {
             ...currentTrip,
@@ -843,6 +866,7 @@ function App() {
       };
 
       setBookingRequestState(requestSnapshot);
+      bookingRequestStateRef.current = requestSnapshot;
       upsertSessionBooking(requestSnapshot);
 
       if (customerDraft.needsName) {
@@ -900,6 +924,7 @@ function App() {
       };
 
       setBookingRequestState(nextBooking);
+      bookingRequestStateRef.current = nextBooking;
       upsertSessionBooking(nextBooking);
       setBookingReference(nextBooking.bookingReference);
       setCustomerSession((current) => current ? { ...current, name: nextBooking.customerName } : current);
@@ -909,6 +934,7 @@ function App() {
       if (err instanceof ApiRequestError && err.status === 409) {
         closeBooking();
         setBookingRequestState(null);
+        bookingRequestStateRef.current = null;
         setPageNotice(err.message || 'Driver is unavailable for this return trip');
         void refreshTrips().catch(() => undefined);
       } else {
