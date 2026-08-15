@@ -8,9 +8,9 @@ import {
   CheckCircle2,
   ChevronRight,
   Filter,
+  Mail,
   MapPin,
   Phone,
-  Search,
   ShieldCheck,
   Sparkles,
   Star,
@@ -201,17 +201,15 @@ const getTripDriverLabel = (trip?: Partial<ReturnTrip> | null) => {
 };
 
 const NAV_LINKS = [
-  { label: 'Home', active: true },
-  { label: 'Join Us', href: 'https://rootcabs.com/join-us/' },
-  { label: 'Cab Cities', dropdown: true },
-];
-
-const CAB_CITY_LINKS = [
-  { label: 'Chennai', href: 'https://rootcabs.com/taxi-in-chennai/' },
-  { label: 'Kanchipuram', href: 'https://rootcabs.com/taxi-service-in-kanchipuram' },
-  { label: 'Tiruvannamalai', href: 'https://rootcabs.com/taxi-in-tiruvannamalai/' },
-  { label: 'Ranipet', href: 'https://rootcabs.com/taxi-in-ranipet/' },
-  { label: 'Vellore', href: 'https://rootcabs.com/taxi-in-vellore/' },
+  { label: 'Home', href: 'https://rootcabs.com/', active: true },
+  { label: 'Book Ride', href: 'https://rootcabs.com/book-ride' },
+  { label: 'Return deals', href: 'https://rootcabs.com/returntrips' },
+  { label: 'Services', href: 'https://rootcabs.com/services' },
+  { label: 'Cities', href: 'https://rootcabs.com/cities' },
+  { label: 'Drivers', href: 'https://rootcabs.com/drivers' },
+  { label: 'Blog', href: 'https://rootcabs.com/blog' },
+  { label: 'About', href: 'https://rootcabs.com/about' },
+  { label: 'Support', href: 'https://rootcabs.com/support' },
 ];
 
 const FEATURE_CARDS = [
@@ -415,8 +413,6 @@ function App() {
   const [sessionBookings, setSessionBookings] = useState<SessionBookingState[]>([]);
   const tripsRef = useRef<ReturnTrip[]>([]);
   const bookingRequestStateRef = useRef<BookingRequestState | null>(null);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [cabCitiesOpen, setCabCitiesOpen] = useState(false);
   const [profileView, setProfileView] = useState<null | 'profile' | 'upcoming'>(null);
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('relevance');
@@ -983,104 +979,28 @@ function App() {
           <img className="site-nav__logo" src={rootCabsLogo} alt="Root Cabs" />
         </div>
         <div className="site-nav__actions">
-          <label className="searchbox site-nav__search">
-            <Search size={18} />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search city, driver, cab" />
-          </label>
           <nav className="site-nav__links" aria-label="Primary navigation">
             {NAV_LINKS.map((link) => (
-              link.dropdown ? (
-                <div key={link.label} className={`site-nav__dropdown${cabCitiesOpen ? ' is-open' : ''}`}>
-                  <button
-                    type="button"
-                    className={`site-nav__link${link.active ? ' is-active' : ''}`}
-                    aria-expanded={cabCitiesOpen}
-                    aria-haspopup="menu"
-                    onClick={() => setCabCitiesOpen((current) => !current)}
-                  >
-                    <span>{link.label}</span>
-                    <ChevronRight size={14} className="site-nav__caret" />
-                  </button>
-                  {cabCitiesOpen ? (
-                    <div className="site-nav__dropdown-menu" role="menu" aria-label="Cab cities">
-                      {CAB_CITY_LINKS.map((city) => (
-                        <a
-                          key={city.label}
-                          className="site-nav__dropdown-item"
-                          role="menuitem"
-                          href={city.href}
-                          onClick={() => setCabCitiesOpen(false)}
-                        >
-                          {city.label}
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <button
-                  key={link.label}
-                  type="button"
-                  className={`site-nav__link${link.active ? ' is-active' : ''}`}
-                  onClick={() => {
-                    if (link.href) {
-                      window.location.href = link.href;
-                    }
-                  }}
-                >
-                  <span>{link.label}</span>
-                </button>
-              )
+              <a
+                key={link.label}
+                className={`site-nav__link${link.active ? ' is-active' : ''}`}
+                href={link.href}
+              >
+                <span>{link.label}</span>
+              </a>
             ))}
           </nav>
-          {customerSession ? (
-            <div className="topbar__profile">
-              <button className="profile-chip" type="button" onClick={() => setProfileOpen((current) => !current)}>
-                <UserRound size={16} />
-                <span>{customerSession.name || formatPhonePreview(customerSession.phoneNumber)}</span>
-              </button>
-            </div>
-          ) : null}
-          <button type="button" className="site-nav__contact">Contact Us</button>
+          <button
+            type="button"
+            className="site-nav__contact"
+            onClick={() => {
+              window.location.href = 'https://rootcabs.com/book-ride';
+            }}
+          >
+            Book Now
+          </button>
         </div>
       </header>
-
-      {customerSession && profileOpen ? (
-        <div className="profile-popover">
-          <button className="profile-popover__overlay" type="button" aria-label="Close profile menu" onClick={() => setProfileOpen(false)} />
-          <div className="profile-menu">
-            <button
-              className="profile-menu__item"
-              type="button"
-              onClick={() => {
-                setProfileView('profile');
-                setProfileOpen(false);
-              }}
-            >
-              Profile
-            </button>
-            <button
-              className="profile-menu__item"
-              type="button"
-              onClick={() => {
-                setProfileView('upcoming');
-                setProfileOpen(false);
-              }}
-            >
-              Upcoming trips
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {cabCitiesOpen ? (
-        <button
-          className="site-nav__dropdown-overlay"
-          type="button"
-          aria-label="Close cab cities menu"
-          onClick={() => setCabCitiesOpen(false)}
-        />
-      ) : null}
 
       <main className="layout">
         <aside className="filters">
