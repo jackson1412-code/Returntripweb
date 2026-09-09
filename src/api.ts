@@ -266,6 +266,11 @@ export async function loadReturnTrips(): Promise<ReturnTrip[]> {
   return toArray(payload);
 }
 
+export async function loadDriverReturnTrips(): Promise<ReturnTrip[]> {
+  const payload = await requestJson<ApiResponse>('/api/customer/dev/return-trips/driver');
+  return toArray(payload);
+}
+
 export async function loadReturnTrip(tripId: number | string): Promise<ReturnTrip | null> {
   const payload = await requestJson<ApiResponse>(`/api/customer/dev/return-trips/${tripId}`);
   return toTrip(payload);

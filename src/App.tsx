@@ -23,6 +23,7 @@ import rootCabsLogo from './assets/rootcabs-logo.svg';
 import {
   ApiRequestError,
   bookReturnTrip,
+  loadDriverReturnTrips,
   loadReturnTrips,
   lookupCustomer,
   registerCustomer,
@@ -145,6 +146,37 @@ const isTripSelectable = (trip: ReturnTrip) => {
   const hasBooking = trip.bookingId !== null && trip.bookingId !== undefined;
   const expiresAt = trip.expiresAt ? new Date(trip.expiresAt).getTime() : Number.POSITIVE_INFINITY;
   return isActive && !hasBooking && expiresAt > Date.now();
+};
+
+const TERMINAL_RETURN_TRIP_EVENT_TYPES = new Set(['EXPIRED', 'CANCELLED', 'DELETED']);
+
+const mergeTripStatusEvent = (
+  trip: ReturnTrip | null | undefined,
+  event: ReturnTripStatusChangedEvent,
+): ReturnTrip | null => {
+  const base = trip || (event.trip ? { ...event.trip } : null);
+  if (!base) return null;
+
+  return {
+    ...base,
+    status: event.status ?? base.status ?? null,
+    bookingState: event.bookingState ?? base.bookingState ?? null,
+    bookingId: event.bookingId ?? base.bookingId ?? null,
+    pendingRequest: event.pendingRequest ?? base.pendingRequest,
+    pendingResponse: event.pendingResponse ?? base.pendingResponse ?? null,
+    driverId: event.driverId !== null && event.driverId !== undefined ? Number(event.driverId) : base.driverId,
+    supportReviewPending: event.supportReviewPending ?? base.supportReviewPending,
+    notificationType: event.notificationType ?? base.notificationType ?? null,
+    linkedBooking: event.linkedBooking ?? base.linkedBooking ?? null,
+    Driver: event.Driver ?? base.Driver ?? null,
+    cabSnapshot: event.cabSnapshot ?? base.cabSnapshot ?? null,
+  };
+};
+
+const shouldRemoveFromActiveList = (event: ReturnTripStatusChangedEvent) => {
+  const normalizedEventType = normalizeTripStatus(event.eventType);
+  const normalizedStatus = normalizeTripStatus(event.status);
+  return TERMINAL_RETURN_TRIP_EVENT_TYPES.has(normalizedEventType) || TERMINAL_RETURN_TRIP_EVENT_TYPES.has(normalizedStatus);
 };
 
 const formatPhonePreview = (value: string) => {
@@ -539,68 +571,57 @@ function App() {
       },
       (statusEvent) => {
         if (!mounted) return;
-        // bookingId is a separate booking identifier and should not be used as the trip key.
-        // Use returnTripId / tripId / trip.id for routing SSE status updates to the correct return trip.
-        const eventTripId = statusEvent.returnTripId ?? statusEvent.tripId ?? statusEvent.trip?.id ?? null;
-        if (eventTripId === null || eventTripId === undefined) return;
-        const currentRequest = bookingRequestStateRef.current && String(bookingRequestStateRef.current.tripId) === String(eventTripId) ? bookingRequestStateRef.current : null;
-        const fallbackTrip = currentRequest
-          ? {
-            id: Number(eventTripId) || Number(currentRequest.tripId) || 0,
-            status: currentRequest.status ?? statusEvent.status ?? null,
-            bookingState: currentRequest.bookingState ?? statusEvent.bookingState ?? null,
-            bookingId: statusEvent.bookingId ?? null,
-            driverId: statusEvent.driverId ?? 0,
-            pendingRequest: currentRequest.pendingRequest ?? statusEvent.pendingRequest,
-            pendingResponse: statusEvent.pendingResponse ?? null,
-            supportReviewPending: statusEvent.supportReviewPending ?? currentRequest.phase === 'support',
-            notificationType: statusEvent.notificationType ?? (currentRequest.phase === 'support' ? 'ASSIGNED_TO_SUPPORT' : null),
-            linkedBooking: statusEvent.linkedBooking ?? null,
-            Driver: statusEvent.Driver ?? null,
-            cabSnapshot: statusEvent.cabSnapshot ?? null,
-          }
-          : null;
-        const currentTrip = statusEvent.trip || tripsRef.current.find((trip) => String(trip.id) === String(eventTripId)) || fallbackTrip || null;
-        const mergedTrip = currentTrip
-          ? {
-            ...currentTrip,
-            status: statusEvent.status ?? currentTrip.status ?? null,
-            bookingState: statusEvent.bookingState ?? currentTrip.bookingState ?? null,
-            bookingId: statusEvent.bookingId ?? currentTrip.bookingId ?? null,
-            driverId: statusEvent.driverId ?? currentTrip.driverId,
-            pendingRequest: statusEvent.pendingRequest ?? currentTrip.pendingRequest,
-            pendingResponse: statusEvent.pendingResponse ?? currentTrip.pendingResponse ?? null,
-            supportReviewPending: statusEvent.supportReviewPending ?? currentTrip.supportReviewPending,
-            notificationType: statusEvent.notificationType ?? currentTrip.notificationType ?? null,
-            linkedBooking: statusEvent.linkedBooking ?? currentTrip.linkedBooking ?? null,
-            Driver: statusEvent.Driver ?? currentTrip.Driver ?? null,
-            cabSnapshot: statusEvent.cabSnapshot ?? currentTrip.cabSnapshot ?? null,
-          }
-          : null;
-        if (!mergedTrip) return;
-        const nextPhase = resolveBookingPhase(mergedTrip);
-        const bookingReferenceLabel = getBookingReference(mergedTrip.linkedBooking) || (mergedTrip.bookingId !== null && mergedTrip.bookingId !== undefined ? String(mergedTrip.bookingId) : "");
-        const driverLabel = getTripDriverLabel(mergedTrip);
-        setBookingRequestState((current) => (current && String(current.tripId) === String(eventTripId)
-          ? {
-            ...current,
-            bookingReference: bookingReferenceLabel || current.bookingReference,
-            status: mergedTrip.status ?? current.status,
-            bookingState: mergedTrip.bookingState ?? current.bookingState,
-            pendingRequest: mergedTrip.pendingRequest ?? current.pendingRequest,
-            driver: driverLabel || current.driver,
-            phase: nextPhase,
-          }
-          : current));
-        setSessionBookings((current) => current.map((booking) => (String(booking.tripId) === String(eventTripId)
-          ? {
-            ...booking,
-            bookingReference: bookingReferenceLabel || booking.bookingReference,
-            driver: driverLabel || booking.driver,
-            phase: nextPhase,
-          }
-          : booking)));
-        void refreshTrips().catch(() => undefined);
+        const eventTripId = statusEvent.returnTripId ?? statusEvent.trip?.id ?? statusEvent.tripId ?? null;
+        const isTerminal = shouldRemoveFromActiveList(statusEvent);
+
+        if (eventTripId !== null && eventTripId !== undefined) {
+          const eventTripKey = String(eventTripId);
+          const mergedTrip = mergeTripStatusEvent(
+            tripsRef.current.find((trip) => String(trip.id) === eventTripKey) || null,
+            statusEvent,
+          );
+
+          setTrips((current) => {
+            const nextTrips = current.map((trip) => (
+              String(trip.id) === eventTripKey
+                ? (mergedTrip || trip)
+                : trip
+            ));
+
+            if (isTerminal || normalizeTripStatus(statusEvent.status) === 'BOOKED' || normalizeTripStatus(statusEvent.bookingState) === 'BOOKED') {
+              return nextTrips.filter((trip) => String(trip.id) !== eventTripKey && isTripSelectable(trip));
+            }
+
+            return nextTrips.filter(isTripSelectable);
+          });
+
+          const nextPhase = resolveBookingPhase(mergedTrip || statusEvent);
+          const bookingReferenceLabel = getBookingReference((mergedTrip as ReturnTrip | null)?.linkedBooking) || ((mergedTrip?.bookingId !== null && mergedTrip?.bookingId !== undefined) ? String(mergedTrip.bookingId) : '');
+          const driverLabel = getTripDriverLabel(mergedTrip);
+
+          setBookingRequestState((current) => (current && String(current.tripId) === eventTripKey
+            ? {
+              ...current,
+              bookingReference: bookingReferenceLabel || current.bookingReference,
+              status: mergedTrip?.status ?? current.status,
+              bookingState: mergedTrip?.bookingState ?? current.bookingState,
+              pendingRequest: mergedTrip?.pendingRequest ?? current.pendingRequest,
+              driver: driverLabel || current.driver,
+              phase: nextPhase,
+            }
+            : current));
+
+          setSessionBookings((current) => current.map((booking) => (String(booking.tripId) === eventTripKey
+            ? {
+              ...booking,
+              bookingReference: bookingReferenceLabel || booking.bookingReference,
+              driver: driverLabel || booking.driver,
+              phase: nextPhase,
+            }
+            : booking)));
+        }
+
+        void refreshTrips(true).catch(() => undefined);
       },
       () => {
         if (!mounted) return;
@@ -614,8 +635,20 @@ function App() {
     };
   }, []);
 
-  const refreshTrips = useCallback(async () => {
-    const data = (await loadReturnTrips()).filter(isTripSelectable);
+  const refreshTrips = useCallback(async (preferDriverEndpoint = false) => {
+    const fetchTrips = async () => {
+      if (preferDriverEndpoint) {
+        try {
+          return await loadDriverReturnTrips();
+        } catch (error) {
+          console.warn(`${UI_DEBUG_PREFIX} driver refresh failed, falling back to customer list`, error);
+        }
+      }
+
+      return loadReturnTrips();
+    };
+
+    const data = (await fetchTrips()).filter(isTripSelectable);
     setTrips(data);
     const priceCap = Math.max(...data.map((trip) => Number(getTripFareValue(trip)) || 0), 0);
     setMaxPrice(priceCap || 5000);
