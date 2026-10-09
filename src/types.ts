@@ -107,6 +107,7 @@ export type ReturnTripStatusChangedEvent = {
   bookingState?: string | null;
   bookingId?: number | string | null;
   driverId?: number | string | null;
+  unavailableReturnTripIds?: Array<number | string>;
   pendingRequest?: unknown;
   pendingResponse?: {
     response?: string | null;

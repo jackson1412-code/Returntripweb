@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Filter,
+  Tag,
   Mail,
   MapPin,
   Phone,
@@ -86,6 +87,41 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
   { key: 'arrival', label: 'Arrival' },
 ];
 
+const GUIDE_STORAGE_KEY = 'return-trips-guide-seen';
+
+const GUIDE_STEPS = [
+  {
+    title: 'Browse return deals',
+    text: 'See active trips shared by verified drivers with route, fare, vehicle and expiry details.',
+    Icon: Sparkles,
+  },
+  {
+    title: 'Pick a trip',
+    text: 'Choose the return ride that matches your pickup city, destination and budget.',
+    Icon: Filter,
+  },
+  {
+    title: 'Verify phone',
+    text: 'Enter your mobile number and complete OTP verification before requesting the ride.',
+    Icon: Phone,
+  },
+  {
+    title: 'Send request',
+    text: 'Your booking request goes to the assigned driver for confirmation.',
+    Icon: ShieldCheck,
+  },
+  {
+    title: 'Wait for response',
+    text: 'If the driver accepts, the trip is booked. Expired or cancelled trips disappear automatically.',
+    Icon: TimerReset,
+  },
+  {
+    title: 'Get confirmation',
+    text: 'Once accepted, your booking details appear with the confirmed route, fare and driver.',
+    Icon: CheckCircle2,
+  },
+];
+
 const formatMoney = (value: unknown) => {
   const num = Number(value);
   if (!Number.isFinite(num)) return '-';
@@ -140,6 +176,7 @@ const matchesText = (trip: ReturnTrip, query: string) => {
 const buildRecommendedScore = (trip: ReturnTrip) =>
   (Number(trip.driverRating || trip.Driver?.rating || 0) * 2) - (Number(getTripFareValue(trip) || 0) / 1000);
 const UI_DEBUG_PREFIX = '[return-trips:ui]';
+const LOGGED_IN_DRIVER_ID = import.meta.env.VITE_DRIVER_ID ? String(import.meta.env.VITE_DRIVER_ID) : null;
 
 const isTripSelectable = (trip: ReturnTrip) => {
   const isActive = trip.status === 'ACTIVE';
@@ -247,30 +284,30 @@ const NAV_LINKS = [
 const FEATURE_CARDS = [
   {
     key: 'refresh',
-    eyebrow: 'Live availability',
-    text: 'See the latest return trips available right now.',
-    cta: 'Refresh now',
+    title: 'Live return deals near your route',
+    text: 'Updated every few seconds',
+    cta: 'REFRESH NOW',
     tone: 'promo-card--violet',
   },
   {
     key: 'expiring',
-    eyebrow: 'Expiring soon',
-    text: 'Spot trips that are close to closing so you can book faster.',
-    cta: 'Toggle filter',
+    title: 'Trips closing soon today',
+    text: 'Book before the timer ends',
+    cta: 'EXPIRING',
     tone: 'promo-card--rose',
   },
   {
     key: 'rating',
-    eyebrow: 'Top rated drivers',
-    text: 'Bring the best-rated drivers to the top of the list.',
-    cta: 'Sort by rating',
+    title: 'Top rated drivers first',
+    text: 'Verified drivers with trusted ratings',
+    cta: 'SHIELD',
     tone: 'promo-card--mint',
   },
   {
     key: 'price',
-    eyebrow: 'Lowest fare first',
-    text: 'Show the most budget-friendly trips first.',
-    cta: 'Sort by price',
+    title: 'Lowest fares for return trips',
+    text: 'Sort deals by budget',
+    cta: 'SAVINGS',
     tone: 'promo-card--sky',
   },
 ];
@@ -446,6 +483,7 @@ function App() {
   const tripsRef = useRef<ReturnTrip[]>([]);
   const bookingRequestStateRef = useRef<BookingRequestState | null>(null);
   const [profileView, setProfileView] = useState<null | 'profile' | 'upcoming'>(null);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('relevance');
   const [pickupCity, setPickupCity] = useState('all');
@@ -473,6 +511,25 @@ function App() {
     welcomeBackMessage: '',
   });
   const [otpCode, setOtpCode] = useState('');
+
+  useEffect(() => {
+    try {
+      if (!window.localStorage.getItem(GUIDE_STORAGE_KEY)) {
+        setGuideOpen(true);
+      }
+    } catch {
+      setGuideOpen(true);
+    }
+  }, []);
+
+  const closeGuide = useCallback(() => {
+    try {
+      window.localStorage.setItem(GUIDE_STORAGE_KEY, 'true');
+    } catch {
+      // The modal should still close if storage is blocked.
+    }
+    setGuideOpen(false);
+  }, []);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -571,8 +628,23 @@ function App() {
       },
       (statusEvent) => {
         if (!mounted) return;
+        if (
+          LOGGED_IN_DRIVER_ID &&
+          statusEvent.driverId !== null &&
+          statusEvent.driverId !== undefined &&
+          String(statusEvent.driverId) !== LOGGED_IN_DRIVER_ID
+        ) {
+          return;
+        }
+
         const eventTripId = statusEvent.returnTripId ?? statusEvent.trip?.id ?? statusEvent.tripId ?? null;
         const isTerminal = shouldRemoveFromActiveList(statusEvent);
+        const acceptedUnavailableIds = normalizeTripStatus(statusEvent.eventType) === 'ACCEPTED'
+          ? new Set([
+            ...(eventTripId !== null && eventTripId !== undefined ? [String(eventTripId)] : []),
+            ...(statusEvent.unavailableReturnTripIds || []).map(String),
+          ])
+          : new Set<string>();
 
         if (eventTripId !== null && eventTripId !== undefined) {
           const eventTripKey = String(eventTripId);
@@ -587,6 +659,10 @@ function App() {
                 ? (mergedTrip || trip)
                 : trip
             ));
+
+            if (acceptedUnavailableIds.size > 0) {
+              return nextTrips.filter((trip) => !acceptedUnavailableIds.has(String(trip.id)) && isTripSelectable(trip));
+            }
 
             if (isTerminal || normalizeTripStatus(statusEvent.status) === 'BOOKED' || normalizeTripStatus(statusEvent.bookingState) === 'BOOKED') {
               return nextTrips.filter((trip) => String(trip.id) !== eventTripKey && isTripSelectable(trip));
@@ -1006,7 +1082,7 @@ function App() {
   }, [selectedTrip, trips, bookingBusy]);
 
   return (
-    <div className={`page-shell${selectedTrip || bookingRequestState || profileView ? ' page-shell--booking-open' : ''}`}>
+    <div className={`page-shell${selectedTrip || bookingRequestState || profileView || guideOpen ? ' page-shell--booking-open' : ''}`}>
       <header className="site-nav">
         <div className="site-nav__brand">
           <img className="site-nav__logo" src={rootCabsLogo} alt="Root Cabs" />
@@ -1045,6 +1121,11 @@ function App() {
           <button className="filters__action filters__action--top" type="button" onClick={() => setProfileView('upcoming')}>
             <span>Upcoming trips</span>
             <strong>{upcomingSessionBookings.length}</strong>
+          </button>
+
+          <button className="filters__action filters__action--guide" type="button" onClick={() => setGuideOpen(true)}>
+            <span>How it works</span>
+            <Sparkles size={16} />
           </button>
 
           <section className="filter-group">
@@ -1090,7 +1171,7 @@ function App() {
               type="range"
               min="0"
               max={Math.max(highestPrice, 1000)}
-              step="50"
+              step="1"
               value={maxPrice}
               onChange={(e) => setMaxPrice(Number(e.target.value))}
             />
@@ -1122,10 +1203,11 @@ function App() {
             <div className="promo-strip">
               {FEATURE_CARDS.map((card) => (
                 <article key={card.key} className={`promo-card ${card.tone}`}>
-                  <strong>{card.eyebrow}</strong>
+                  <strong>{card.title}</strong>
                   <p>{card.text}</p>
                   <button type="button" className="promo-card__cta" onClick={() => handleFeatureAction(card.key)}>
-                    {card.key === 'expiring' && onlyExpiringSoon ? 'Show all rides' : card.cta}
+                    <Tag size={18} />
+                    {card.key === 'expiring' && onlyExpiringSoon ? 'SHOW ALL' : card.cta}
                   </button>
                 </article>
               ))}
@@ -1176,6 +1258,45 @@ function App() {
           </div>
         </section>
       </main>
+
+      {guideOpen ? (
+        <div className="guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+          <div className="guide-modal__overlay" onClick={closeGuide} />
+          <section className="guide-modal__card">
+            <button className="icon-btn guide-modal__close" type="button" aria-label="Close guide" onClick={closeGuide}>
+              <X size={18} />
+            </button>
+            <div className="guide-modal__intro">
+              <p className="booking-panel__eyebrow">Before you book</p>
+              <h2 id="guide-title">How Return Deals Work</h2>
+              <p>Follow these steps to request an available return trip and know what happens after the driver responds.</p>
+            </div>
+
+            <div className="guide-flow" aria-label="Return deals booking steps">
+              {GUIDE_STEPS.map(({ title, text, Icon }, index) => (
+                <article className="guide-flow__step" key={title}>
+                  <div className="guide-flow__badge">
+                    <Icon size={20} />
+                  </div>
+                  <div>
+                    <span>Step {index + 1}</span>
+                    <h3>{title}</h3>
+                    <p>{text}</p>
+                  </div>
+                  {index < GUIDE_STEPS.length - 1 ? <ArrowRight className="guide-flow__connector" size={18} aria-hidden="true" /> : null}
+                </article>
+              ))}
+            </div>
+
+            <div className="guide-modal__actions">
+              <button className="ghost-btn" type="button" onClick={closeGuide}>
+                Got it
+                <CheckCircle2 size={16} />
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {selectedTrip ? (
         <div className="booking-drawer">

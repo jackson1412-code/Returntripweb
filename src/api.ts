@@ -5,6 +5,7 @@ import type { ApiResponse, ReturnTrip, ReturnTripAvailableEvent, ReturnTripStatu
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://uat.api.c4d.smartapis.cyou';
 
 const RETURN_TRIPS_SSE_PATH = import.meta.env.VITE_RETURN_TRIPS_SSE_PATH || '/api/customer/dev/return-trips/events';
+const DRIVER_RETURN_TRIPS_PATH = import.meta.env.VITE_DRIVER_RETURN_TRIPS_PATH || '/api/customer/dev/return-trips/driver';
 const SSE_DEBUG_PREFIX = '[return-trips:sse]';
 
 type RequestOptions = {
@@ -181,6 +182,7 @@ const normalizeStatusChangedEvent = (payload: unknown): ReturnTripStatusChangedE
     bookingState?: string | null;
     bookingId?: number | string | null;
     driverId?: number | string | null;
+    unavailableReturnTripIds?: Array<number | string>;
     pendingRequest?: unknown;
     pendingResponse?: {
       response?: string | null;
@@ -209,6 +211,7 @@ const normalizeStatusChangedEvent = (payload: unknown): ReturnTripStatusChangedE
     bookingState: source.bookingState ?? source.trip?.bookingState ?? null,
     bookingId: source.bookingId ?? source.trip?.bookingId ?? null,
     driverId: source.driverId ?? source.trip?.driverId ?? null,
+    unavailableReturnTripIds: Array.isArray(source.unavailableReturnTripIds) ? source.unavailableReturnTripIds : [],
     pendingRequest: source.pendingRequest ?? source.trip?.pendingRequest,
     pendingResponse: source.pendingResponse ?? source.trip?.pendingResponse ?? null,
     supportReviewPending: source.supportReviewPending ?? source.trip?.supportReviewPending ?? false,
@@ -267,7 +270,7 @@ export async function loadReturnTrips(): Promise<ReturnTrip[]> {
 }
 
 export async function loadDriverReturnTrips(): Promise<ReturnTrip[]> {
-  const payload = await requestJson<ApiResponse>('/api/customer/dev/return-trips/driver');
+  const payload = await requestJson<ApiResponse>(DRIVER_RETURN_TRIPS_PATH);
   return toArray(payload);
 }
 
@@ -319,7 +322,11 @@ export function subscribeReturnTripUnavailable(
         statusChangedEvent.status !== null ||
         statusChangedEvent.bookingState !== null
       ) &&
-      (statusChangedEvent.eventType === 'return_trip_status_changed' || statusChangedEvent.status !== null || statusChangedEvent.bookingState !== null)
+      (
+        statusChangedEvent.eventType !== undefined ||
+        statusChangedEvent.status !== null ||
+        statusChangedEvent.bookingState !== null
+      )
     ) {
       console.info(`${SSE_DEBUG_PREFIX} parsed status change event`, statusChangedEvent);
       onStatusChanged?.(statusChangedEvent);
