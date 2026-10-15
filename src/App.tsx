@@ -23,7 +23,9 @@ import rootCabsLogo from './assets/rootcabs-logo.svg';
 import {
   ApiRequestError,
   bookReturnTrip,
+  loadBookingConfirmation,
   loadDriverReturnTrips,
+  loadReturnTrip,
   loadReturnTrips,
   lookupCustomer,
   registerCustomer,
@@ -32,7 +34,7 @@ import {
   subscribeReturnTripUnavailable,
   verifyCustomerOtp,
 } from './api';
-import type { BookingCustomerDraft, ReturnTrip } from './types';
+import type { BookingConfirmation, BookingCustomerDraft, ReturnTrip, ReturnTripPricing, ReturnTripStatusChangedEvent, SupportFare } from './types';
 
 type BookingStep = 'phone' | 'otp' | 'identity' | 'confirm' | 'success';
 
@@ -57,17 +59,36 @@ type SessionBookingState = {
 };
 
 type BookingRequestState = {
-  phase: 'pending' | 'confirmed' | 'rejected' | 'support' | 'error';
+  phase: 'pending' | 'support' | 'confirmed' | 'rejected' | 'expired' | 'error';
   tripId: number | string;
+  bookingId?: number | string | null;
   bookingReference: string;
   customerName: string;
   phoneNumber: string;
   route: string;
   fare: string;
   driver: string;
+  supportFare?: SupportFare | null;
+  pricing?: ReturnTripPricing | null;
+  pricingSource?: string | null;
+  farePending?: boolean;
+  originalFare?: string;
+  discountPercentage?: string;
+  discountAmount?: string;
+  discountLabel?: string;
   pendingRequest?: unknown;
+  supportReviewPending?: boolean;
   status?: string | null;
   bookingState?: string | null;
+};
+
+type FareSource = {
+  supportFare?: SupportFare | null;
+  returnTripPricing?: ReturnTripPricing | null;
+  finalPrice?: unknown;
+  driverOfferPrice?: unknown;
+  discount?: unknown;
+  discountAmount?: unknown;
 };
 
 type SessionConflictState = {
@@ -185,7 +206,83 @@ const formatPhonePreview = (value: string) => {
   return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
 };
 
-const getTripFareValue = (trip: ReturnTrip) => trip.driverOfferPrice ?? trip.finalPrice;
+const getTripFareValue = (trip: ReturnTrip) => trip.supportFare?.finalPrice ?? trip.finalPrice ?? trip.driverOfferPrice;
+const getTripDiscountPercentage = (trip: ReturnTrip) => trip.supportFare?.discountPercentage ?? trip.discount;
+const getTripDiscountAmount = (trip: ReturnTrip) => trip.supportFare?.discountAmount ?? trip.discountAmount;
+const getTripOriginalFare = (trip: ReturnTrip) => trip.supportFare?.originalFare;
+const getPricingDiscountLabel = (source?: string | null) => (
+  normalizeTripStatus(source) === 'RETURN_TRIP_SUPPORT'
+    ? 'Support discount'
+    : normalizeTripStatus(source) === 'RETURN_TRIP_DRIVER'
+      ? 'Driver discount'
+      : 'Discount'
+);
+const hasCompletePricing = (pricing?: ReturnTripPricing | null) => Boolean(
+  pricing &&
+  pricing.originalFare !== null &&
+  pricing.originalFare !== undefined &&
+  pricing.discountPercentage !== null &&
+  pricing.discountPercentage !== undefined &&
+  pricing.discountAmount !== null &&
+  pricing.discountAmount !== undefined &&
+  pricing.finalPrice !== null &&
+  pricing.finalPrice !== undefined,
+);
+const isSupportTripState = (trip: Partial<ReturnTrip>) => (
+  normalizeTripStatus(trip.status) === 'SUPPORT' ||
+  normalizeTripStatus(trip.bookingState) === 'SUPPORT' ||
+  Boolean(trip.supportReviewPending)
+);
+
+const buildFareSnapshot = (trip: FareSource) => {
+  const pricing = trip.returnTripPricing ?? null;
+
+  if (pricing) {
+    if (!hasCompletePricing(pricing)) {
+      return {
+        pricing,
+        pricingSource: pricing.source ?? null,
+        supportFare: null,
+        fare: 'Fare update pending',
+        farePending: true,
+        originalFare: undefined,
+        discountPercentage: undefined,
+        discountAmount: undefined,
+        discountLabel: getPricingDiscountLabel(pricing.source),
+      };
+    }
+
+    return {
+      pricing,
+      pricingSource: pricing.source ?? null,
+      supportFare: null,
+      fare: `Rs ${formatMoney(pricing.finalPrice)}`,
+      farePending: false,
+      originalFare: `Rs ${formatMoney(pricing.originalFare)}`,
+      discountPercentage: `${formatMoney(pricing.discountPercentage)}%`,
+      discountAmount: `Rs ${formatMoney(pricing.discountAmount)}`,
+      discountLabel: getPricingDiscountLabel(pricing.source),
+    };
+  }
+
+  const supportFare = trip.supportFare ?? null;
+  const finalPrice = supportFare?.finalPrice ?? trip.finalPrice ?? trip.driverOfferPrice;
+  const originalFare = supportFare?.originalFare;
+  const discountPercentage = supportFare?.discountPercentage ?? trip.discount;
+  const discountAmount = supportFare?.discountAmount ?? trip.discountAmount;
+
+  return {
+    pricing: null,
+    pricingSource: null,
+    supportFare,
+    fare: `Rs ${formatMoney(finalPrice)}`,
+    farePending: false,
+    originalFare: originalFare !== null && originalFare !== undefined ? `Rs ${formatMoney(originalFare)}` : undefined,
+    discountPercentage: discountPercentage !== null && discountPercentage !== undefined ? `${formatMoney(discountPercentage)}%` : undefined,
+    discountAmount: discountAmount !== null && discountAmount !== undefined ? `Rs ${formatMoney(discountAmount)}` : undefined,
+    discountLabel: supportFare ? 'Support discount' : 'Driver discount',
+  };
+};
 
 const getBookingReference = (booking: { id?: number | string; bookingReference?: string | null; bookingNumber?: string | null } | null | undefined) => {
   if (!booking) return "";
@@ -230,6 +327,35 @@ const getTripDriverLabel = (trip?: Partial<ReturnTrip> | null) => {
   if (trip.cabSnapshot?.vehicleType) return trip.cabSnapshot.vehicleType;
   if (trip.driverCarType) return trip.driverCarType;
   return "Driver";
+};
+
+const getConfirmationBookingId = (confirmation?: BookingConfirmation | null) => (
+  confirmation?.bookingId ?? confirmation?.id ?? null
+);
+
+const getConfirmationReturnTripId = (confirmation?: BookingConfirmation | null) => (
+  confirmation?.returnTripId ?? confirmation?.returnTrip?.id ?? null
+);
+
+const getConfirmationDriverLabel = (confirmation?: BookingConfirmation | null) => {
+  if (!confirmation) return '';
+  const driver = confirmation.assignedDriver || confirmation.driver || confirmation.Driver;
+  const driverName = [driver?.firstName, driver?.lastName].filter(Boolean).join(' ').trim();
+  if (driverName) return driverName;
+  if (confirmation.cabSnapshot?.carType) return confirmation.cabSnapshot.carType;
+  if (confirmation.cabSnapshot?.vehicleType) return confirmation.cabSnapshot.vehicleType;
+  return '';
+};
+
+const getConfirmationPhase = (confirmation: BookingConfirmation) => {
+  const ownership = normalizeTripStatus(confirmation.ownership);
+  const status = normalizeTripStatus(confirmation.status);
+  const bookingState = normalizeTripStatus(confirmation.bookingState);
+
+  if (ownership === 'ASSIGNED_TO_SUPPORT' || bookingState === 'SUPPORT' || status === 'SUPPORT') return 'support' as const;
+  if (bookingState === 'BOOKED' || status === 'BOOKED' || confirmation.driverId !== null && confirmation.driverId !== undefined) return 'confirmed' as const;
+  if (bookingState === 'EXPIRED' || status === 'EXPIRED') return 'expired' as const;
+  return 'pending' as const;
 };
 
 const NAV_LINKS = [
@@ -419,7 +545,7 @@ const TripCard = ({ trip, onBook, now }: { trip: ReturnTrip; onBook: (trip: Retu
             <CalendarClock size={14} />
             {trip.created_at ? new Date(trip.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'Created recently'}
           </span>
-          <span><WalletCards size={14} /> Save {formatMoney(trip.discountAmount)}</span>
+          <span><WalletCards size={14} /> Save {formatMoney(getTripDiscountAmount(trip))}</span>
         </div>
 
         <div className="trip-card__actions">
@@ -441,10 +567,12 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [pageNotice, setPageNotice] = useState<string | null>(null);
   const [bookingRequestState, setBookingRequestState] = useState<BookingRequestState | null>(null);
+  const bookingRequestStateRef = useRef<BookingRequestState | null>(null);
+  const refreshTripsPromiseRef = useRef<Promise<void> | null>(null);
+  const bookingRefreshTokenRef = useRef(0);
   const [customerSession, setCustomerSession] = useState<CustomerSessionState | null>(null);
   const [sessionBookings, setSessionBookings] = useState<SessionBookingState[]>([]);
   const tripsRef = useRef<ReturnTrip[]>([]);
-  const bookingRequestStateRef = useRef<BookingRequestState | null>(null);
   const [profileView, setProfileView] = useState<null | 'profile' | 'upcoming'>(null);
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('relevance');
@@ -485,23 +613,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  useEffect(() => {
     tripsRef.current = trips;
   }, [trips]);
+
   useEffect(() => {
     bookingRequestStateRef.current = bookingRequestState;
   }, [bookingRequestState]);
-
-
   useEffect(() => {
     let mounted = true;
     const hydrateTrips = async (showLoader = false) => {
@@ -571,54 +688,81 @@ function App() {
       },
       (statusEvent) => {
         if (!mounted) return;
-        const eventTripId = statusEvent.returnTripId ?? statusEvent.trip?.id ?? statusEvent.tripId ?? null;
-        const isTerminal = shouldRemoveFromActiveList(statusEvent);
+        const eventType = normalizeTripStatus(statusEvent.eventType);
+        const eventTripId = statusEvent.returnTripId ?? statusEvent.tripId ?? statusEvent.trip?.id ?? null;
+        const eventBookingId = statusEvent.bookingId ?? statusEvent.trip?.bookingId ?? null;
+        if (eventTripId === null && eventBookingId === null) return;
 
-        if (eventTripId !== null && eventTripId !== undefined) {
-          const eventTripKey = String(eventTripId);
-          const mergedTrip = mergeTripStatusEvent(
-            tripsRef.current.find((trip) => String(trip.id) === eventTripKey) || null,
-            statusEvent,
-          );
+        const affectedIds = new Set([
+          ...(eventTripId !== null && eventTripId !== undefined ? [String(eventTripId)] : []),
+          ...(statusEvent.unavailableReturnTripIds || []).map(String),
+        ]);
+        const isSupportTransfer = eventType === 'NO_RESPONSE' || (eventType === 'REJECTED' && normalizeTripStatus(statusEvent.status) === 'SUPPORT');
+        const isAccepted = eventType === 'ACCEPTED';
+        const shouldRemoveFromListings = ['DELETED', 'CANCELLED'].includes(eventType) || isAccepted || isSupportTransfer;
 
-          setTrips((current) => {
-            const nextTrips = current.map((trip) => (
-              String(trip.id) === eventTripKey
-                ? (mergedTrip || trip)
-                : trip
-            ));
+        if (shouldRemoveFromListings && affectedIds.size > 0) {
+          setTrips((current) => current.filter((trip) => !affectedIds.has(String(trip.id))));
+        }
 
-            if (isTerminal || normalizeTripStatus(statusEvent.status) === 'BOOKED' || normalizeTripStatus(statusEvent.bookingState) === 'BOOKED') {
-              return nextTrips.filter((trip) => String(trip.id) !== eventTripKey && isTripSelectable(trip));
-            }
+        const currentBooking = bookingRequestStateRef.current;
+        const matchesCurrentBooking = Boolean(currentBooking) && (
+          (eventTripId !== null && eventTripId !== undefined && String(currentBooking!.tripId) === String(eventTripId)) ||
+          (eventBookingId !== null && eventBookingId !== undefined && currentBooking!.bookingId !== null && currentBooking!.bookingId !== undefined && String(currentBooking!.bookingId) === String(eventBookingId)) ||
+          (eventBookingId !== null && eventBookingId !== undefined && currentBooking!.bookingReference && currentBooking!.bookingReference !== 'Pending' && String(currentBooking!.bookingReference) === String(eventBookingId))
+        );
 
-            return nextTrips.filter(isTripSelectable);
-          });
+        if (matchesCurrentBooking && isSupportTransfer) {
+          const nextBooking = {
+            ...currentBooking!,
+            bookingId: eventBookingId ?? currentBooking!.bookingId,
+            bookingReference: eventBookingId ? String(eventBookingId) : currentBooking!.bookingReference,
+            fare: 'Fare update pending',
+            farePending: true,
+            driver: 'Customer Support',
+            pendingRequest: statusEvent.pendingRequest,
+            supportReviewPending: statusEvent.supportReviewPending ?? true,
+            status: statusEvent.status ?? null,
+            bookingState: statusEvent.bookingState ?? null,
+            phase: 'support' as const,
+          };
+          setBookingRequestState(nextBooking);
+          upsertSessionBooking(nextBooking);
+          setPageNotice('Customer Support is arranging another driver for your booking.');
+        }
 
-          const nextPhase = resolveBookingPhase(mergedTrip || statusEvent);
-          const bookingReferenceLabel = getBookingReference((mergedTrip as ReturnTrip | null)?.linkedBooking) || ((mergedTrip?.bookingId !== null && mergedTrip?.bookingId !== undefined) ? String(mergedTrip.bookingId) : '');
-          const driverLabel = getTripDriverLabel(mergedTrip);
-
-          setBookingRequestState((current) => (current && String(current.tripId) === eventTripKey
+        if (matchesCurrentBooking && isAccepted && eventBookingId !== null && eventBookingId !== undefined) {
+          setBookingRequestState((current) => current && (
+            String(current.tripId) === String(eventTripId) ||
+            String(current.bookingId ?? current.bookingReference) === String(eventBookingId)
+          )
             ? {
               ...current,
-              bookingReference: bookingReferenceLabel || current.bookingReference,
-              status: mergedTrip?.status ?? current.status,
-              bookingState: mergedTrip?.bookingState ?? current.bookingState,
-              pendingRequest: mergedTrip?.pendingRequest ?? current.pendingRequest,
-              driver: driverLabel || current.driver,
-              phase: nextPhase,
+              bookingId: eventBookingId,
+              bookingReference: String(eventBookingId),
+              status: statusEvent.status ?? current.status,
+              bookingState: statusEvent.bookingState ?? current.bookingState,
+              phase: 'confirmed',
             }
-            : current));
+            : current);
+        }
 
-          setSessionBookings((current) => current.map((booking) => (String(booking.tripId) === eventTripKey
-            ? {
-              ...booking,
-              bookingReference: bookingReferenceLabel || booking.bookingReference,
-              driver: driverLabel || booking.driver,
-              phase: nextPhase,
-            }
-            : booking)));
+        if (eventTripId !== null && eventTripId !== undefined && (isSupportTransfer || isAccepted)) {
+          const expectedState = isAccepted
+            ? (trip: ReturnTrip) => normalizeTripStatus(trip.status) === 'BOOKED' || normalizeTripStatus(trip.bookingState) === 'BOOKED'
+            : (trip: ReturnTrip) => isSupportTripState(trip);
+
+          void loadReturnTripAfterCommit(eventTripId, expectedState)
+            .then((trip) => {
+              if (!mounted || !trip) return;
+              applyTripToBookingState(trip, isAccepted ? 'confirmed' : 'support');
+            })
+            .catch((err) => console.warn(`${UI_DEBUG_PREFIX} failed to refresh status-changed trip`, err));
+        }
+
+        if (matchesCurrentBooking && eventBookingId !== null && eventBookingId !== undefined) {
+          void refreshBookingConfirmation(eventBookingId, { retry: true })
+            .catch((err) => console.warn(`${UI_DEBUG_PREFIX} failed to refresh booking confirmation`, err));
         }
 
         void refreshTrips(true).catch(() => undefined);
@@ -626,6 +770,19 @@ function App() {
       () => {
         if (!mounted) return;
         console.warn(`${UI_DEBUG_PREFIX} live updates paused, relying on refetch/manual refresh`);
+      },
+      () => {
+        if (!mounted) return;
+        void refreshTrips().catch(() => undefined);
+        const currentBooking = bookingRequestStateRef.current;
+        const currentBookingId = currentBooking?.bookingId ?? (
+          currentBooking?.bookingReference && currentBooking.bookingReference !== 'Pending'
+            ? currentBooking.bookingReference
+            : null
+        );
+        if (currentBookingId) {
+          void refreshBookingConfirmation(currentBookingId, { retry: false }).catch(() => undefined);
+        }
       },
     );
 
@@ -636,22 +793,32 @@ function App() {
   }, []);
 
   const refreshTrips = useCallback(async (preferDriverEndpoint = false) => {
-    const fetchTrips = async () => {
-      if (preferDriverEndpoint) {
-        try {
-          return await loadDriverReturnTrips();
-        } catch (error) {
-          console.warn(`${UI_DEBUG_PREFIX} driver refresh failed, falling back to customer list`, error);
+    if (!refreshTripsPromiseRef.current) {
+      const fetchTrips = async () => {
+        if (preferDriverEndpoint) {
+          try {
+            return await loadDriverReturnTrips();
+          } catch (error) {
+            console.warn(`${UI_DEBUG_PREFIX} driver refresh failed, falling back to customer list`, error);
+          }
         }
-      }
 
-      return loadReturnTrips();
-    };
+        return loadReturnTrips();
+      };
 
-    const data = (await fetchTrips()).filter(isTripSelectable);
-    setTrips(data);
-    const priceCap = Math.max(...data.map((trip) => Number(getTripFareValue(trip)) || 0), 0);
-    setMaxPrice(priceCap || 5000);
+      refreshTripsPromiseRef.current = fetchTrips()
+        .then((loadedTrips) => {
+          const data = loadedTrips.filter(isTripSelectable);
+          setTrips(data);
+          const priceCap = Math.max(...data.map((trip) => Number(getTripFareValue(trip)) || 0), 0);
+          setMaxPrice(priceCap || 5000);
+        })
+        .finally(() => {
+          refreshTripsPromiseRef.current = null;
+        });
+    }
+
+    return refreshTripsPromiseRef.current;
   }, []);
 
   const upsertSessionBooking = useCallback((snapshot: BookingRequestState) => {
@@ -665,7 +832,7 @@ function App() {
         fare: snapshot.fare,
         driver: snapshot.driver,
         bookedAt: new Date().toISOString(),
-        phase: snapshot.phase,
+        phase: snapshot.phase === 'confirmed' ? 'confirmed' : snapshot.phase === 'support' ? 'support' : 'pending',
       },
       ...current.filter((item) => String(item.tripId) !== String(snapshot.tripId)),
     ]);
@@ -675,6 +842,250 @@ function App() {
     setSessionBookings((current) => current.filter((item) => String(item.tripId) !== String(tripId)));
   }, []);
 
+  const loadReturnTripAfterCommit = useCallback(async (
+    tripId: number | string,
+    isReady: (trip: ReturnTrip) => boolean,
+  ) => {
+    let latest: ReturnTrip | null = null;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      latest = await loadReturnTrip(tripId);
+      if (latest && isReady(latest)) return latest;
+      if (attempt < 2) {
+        await new Promise((resolve) => window.setTimeout(resolve, 450 * (attempt + 1)));
+      }
+    }
+
+    return latest;
+  }, []);
+
+  const applyTripToBookingState = useCallback((trip: ReturnTrip, phaseOverride?: BookingRequestState['phase']) => {
+    const nextPhase = phaseOverride || (
+      isSupportTripState(trip)
+        ? 'support'
+        : normalizeTripStatus(trip.bookingState) === 'BOOKED' || normalizeTripStatus(trip.status) === 'BOOKED'
+          ? 'confirmed'
+          : 'pending'
+    );
+    const rawFareSnapshot = buildFareSnapshot(trip);
+    const fareSnapshot = nextPhase === 'support' && !rawFareSnapshot.pricing
+      ? {
+        ...rawFareSnapshot,
+        fare: 'Fare update pending',
+        farePending: true,
+        originalFare: undefined,
+        discountPercentage: undefined,
+        discountAmount: undefined,
+        discountLabel: 'Support discount',
+      }
+      : rawFareSnapshot;
+
+    setBookingRequestState((current) => {
+      if (!current) return current;
+      const sameTrip = String(current.tripId) === String(trip.id);
+      const sameBooking = current.bookingId !== null && current.bookingId !== undefined && trip.bookingId !== null && trip.bookingId !== undefined
+        ? String(current.bookingId) === String(trip.bookingId)
+        : false;
+      if (!sameTrip && !sameBooking) return current;
+
+      const next = {
+        ...current,
+        bookingId: trip.bookingId ?? current.bookingId,
+        bookingReference: trip.bookingId ? String(trip.bookingId) : current.bookingReference,
+        fare: fareSnapshot.fare,
+        pricing: fareSnapshot.pricing ?? current.pricing,
+        pricingSource: fareSnapshot.pricingSource ?? current.pricingSource,
+        farePending: fareSnapshot.farePending ?? current.farePending,
+        supportFare: fareSnapshot.supportFare ?? current.supportFare,
+        originalFare: fareSnapshot.originalFare ?? current.originalFare,
+        discountPercentage: fareSnapshot.discountPercentage ?? current.discountPercentage,
+        discountAmount: fareSnapshot.discountAmount ?? current.discountAmount,
+        discountLabel: fareSnapshot.discountLabel ?? current.discountLabel,
+        driver: nextPhase === 'support' ? 'Customer Support' : getTripDriverLabel(trip) || current.driver,
+        pendingRequest: trip.pendingRequest,
+        supportReviewPending: trip.supportReviewPending,
+        status: trip.status ?? null,
+        bookingState: trip.bookingState ?? null,
+        phase: nextPhase,
+      };
+
+      upsertSessionBooking(next);
+      return next;
+    });
+  }, [upsertSessionBooking]);
+
+  const applyBookingConfirmation = useCallback((confirmation: BookingConfirmation, token?: number) => {
+    if (token !== undefined && token !== bookingRefreshTokenRef.current) return;
+
+    const fareSnapshot = buildFareSnapshot({ returnTripPricing: confirmation.returnTripPricing ?? null });
+    const nextPhase = getConfirmationPhase(confirmation);
+    const confirmationBookingId = getConfirmationBookingId(confirmation);
+    const confirmationReturnTripId = getConfirmationReturnTripId(confirmation);
+    const assignedDriver = getConfirmationDriverLabel(confirmation);
+
+    setBookingRequestState((current) => {
+      if (!current) return current;
+      const sameBooking = confirmationBookingId !== null && confirmationBookingId !== undefined && (
+        String(current.bookingId ?? '') === String(confirmationBookingId) ||
+        String(current.bookingReference ?? '') === String(confirmationBookingId)
+      );
+      const sameTrip = confirmationReturnTripId !== null && confirmationReturnTripId !== undefined && String(current.tripId) === String(confirmationReturnTripId);
+      if (!sameBooking && !sameTrip) return current;
+
+      const next = {
+        ...current,
+        tripId: confirmationReturnTripId ?? current.tripId,
+        bookingId: confirmationBookingId ?? current.bookingId,
+        bookingReference: confirmation.bookingReference || confirmation.bookingNumber || (confirmationBookingId ? String(confirmationBookingId) : current.bookingReference),
+        fare: fareSnapshot.fare,
+        pricing: fareSnapshot.pricing ?? current.pricing,
+        pricingSource: fareSnapshot.pricingSource ?? current.pricingSource,
+        farePending: fareSnapshot.farePending,
+        originalFare: fareSnapshot.originalFare,
+        discountPercentage: fareSnapshot.discountPercentage,
+        discountAmount: fareSnapshot.discountAmount,
+        discountLabel: fareSnapshot.discountLabel,
+        driver: nextPhase === 'support' ? 'Customer Support' : assignedDriver || current.driver,
+        status: confirmation.status ?? current.status,
+        bookingState: confirmation.bookingState ?? current.bookingState,
+        supportReviewPending: nextPhase === 'support' ? true : current.supportReviewPending,
+        phase: nextPhase,
+      };
+
+      upsertSessionBooking(next);
+      return next;
+    });
+  }, [upsertSessionBooking]);
+
+  const refreshBookingConfirmation = useCallback(async (bookingId: number | string, options: { retry?: boolean } = {}) => {
+    const token = bookingRefreshTokenRef.current + 1;
+    bookingRefreshTokenRef.current = token;
+
+    for (let attempt = 0; attempt < (options.retry ? 3 : 1); attempt += 1) {
+      const confirmation = await loadBookingConfirmation(bookingId);
+      if (token !== bookingRefreshTokenRef.current) return null;
+      if (confirmation?.returnTripPricing || attempt === (options.retry ? 2 : 0)) {
+        if (confirmation) applyBookingConfirmation(confirmation, token);
+        return confirmation;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 450 * (attempt + 1)));
+    }
+
+    return null;
+  }, [applyBookingConfirmation]);
+
+  useEffect(() => {
+    if (!bookingRequestState || !['pending', 'support'].includes(bookingRequestState.phase)) return;
+
+    let active = true;
+
+    const pollBookingStatus = async () => {
+      try {
+        const currentBookingId = bookingRequestState.bookingId ?? (
+          bookingRequestState.bookingReference && bookingRequestState.bookingReference !== 'Pending'
+            ? bookingRequestState.bookingReference
+            : null
+        );
+        if (currentBookingId) {
+          await refreshBookingConfirmation(currentBookingId, { retry: false });
+        }
+
+        const trip = await loadReturnTrip(bookingRequestState.tripId);
+        if (!active || !trip) return;
+
+        console.info(`${UI_DEBUG_PREFIX} polled trip status`, {
+          tripId: bookingRequestState.tripId,
+          status: trip.status,
+          bookingState: trip.bookingState,
+          pendingRequest: trip.pendingRequest,
+        });
+
+        if (trip.bookingState === 'PENDING' || trip.pendingRequest) {
+          setBookingRequestState((current) => (
+            current && current.phase === 'pending'
+              ? {
+                ...current,
+                pendingRequest: trip.pendingRequest,
+                status: trip.status ?? null,
+                bookingState: trip.bookingState ?? null,
+              }
+              : current
+          ));
+          return;
+        }
+
+        if (isSupportTripState(trip)) {
+          applyTripToBookingState(trip, 'support');
+          setTrips((current) => current.filter((item) => String(item.id) !== String(trip.id)));
+          return;
+        }
+
+        if (trip.bookingState === 'BOOKED' || trip.status === 'BOOKED') {
+          applyTripToBookingState(trip, 'confirmed');
+          void refreshTrips().catch(() => undefined);
+          return;
+        }
+
+        if (trip.status === 'EXPIRED') {
+          setBookingRequestState((current) => (
+            current
+              ? {
+                ...current,
+                phase: 'expired',
+                status: trip.status ?? null,
+                bookingState: trip.bookingState ?? null,
+                pendingRequest: trip.pendingRequest,
+              }
+              : current
+          ));
+          removeSessionBooking(bookingRequestState.tripId);
+          void refreshTrips().catch(() => undefined);
+          return;
+        }
+
+        if (trip.status === 'ACTIVE' && !trip.pendingRequest) {
+          setBookingRequestState((current) => (
+            current
+              ? {
+                ...current,
+                phase: 'rejected',
+                status: trip.status ?? null,
+                bookingState: trip.bookingState ?? null,
+                pendingRequest: trip.pendingRequest,
+              }
+              : current
+          ));
+          removeSessionBooking(bookingRequestState.tripId);
+          void refreshTrips().catch(() => undefined);
+          return;
+        }
+
+        setBookingRequestState((current) => (
+          current
+            ? {
+              ...current,
+              phase: 'error',
+              status: trip.status ?? null,
+              bookingState: trip.bookingState ?? null,
+              pendingRequest: trip.pendingRequest,
+            }
+            : current
+        ));
+      } catch (err) {
+        console.warn(`${UI_DEBUG_PREFIX} failed to poll booking status`, err);
+      }
+    };
+
+    void pollBookingStatus();
+    const intervalId = window.setInterval(() => {
+      void pollBookingStatus();
+    }, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [applyTripToBookingState, bookingRequestState, refreshBookingConfirmation, refreshTrips, removeSessionBooking, upsertSessionBooking]);
   const cityOptions = useMemo(() => {
     const pickups = Array.from(new Set(trips.map((trip) => trip.pickupCity).filter(Boolean) as string[]));
     const drops = Array.from(new Set(trips.map((trip) => trip.destinationCity).filter(Boolean) as string[]));
@@ -880,14 +1291,19 @@ function App() {
     setBookingError(null);
     try {
       const firstName = customerDraft.name.trim();
+      const selectedFare = buildFareSnapshot(selectedTrip);
       const requestSnapshot = {
         tripId: selectedTrip.id,
         customerName: firstName || 'Customer',
         phoneNumber: formatPhonePreview(customerDraft.phoneNumber),
         route: `${selectedTrip.pickupCity || 'Pickup'} -> ${selectedTrip.destinationCity || 'Drop'}`,
-        fare: `Rs ${formatMoney(getTripFareValue(selectedTrip))}`,
+        fare: selectedFare.fare,
         driver: getTripDriverLabel(selectedTrip),
         bookingReference: 'Pending',
+        supportFare: selectedFare.supportFare,
+        originalFare: selectedFare.originalFare,
+        discountPercentage: selectedFare.discountPercentage,
+        discountAmount: selectedFare.discountAmount,
         pendingRequest: selectedTrip.pendingRequest,
         status: selectedTrip.status ?? null,
         bookingState: selectedTrip.bookingState ?? null,
@@ -931,9 +1347,10 @@ function App() {
       const data = bookingResponse?.data || bookingResponse;
       const responseTrip = data?.returnTrip || bookingResponse?.returnTrip || data?.trip || bookingResponse?.trip || selectedTrip;
       const linkedBooking = data?.linkedBooking || responseTrip?.linkedBooking || data?.booking || bookingResponse?.booking || bookingResponse?.linkedBooking || null;
+      const bookingId = linkedBooking?.id || data?.booking?.id || bookingResponse?.booking?.id || responseTrip?.bookingId || null;
       const bookingReferenceFromResponse = getBookingReference(linkedBooking) || data?.bookingReference || bookingResponse?.bookingReference || "";
       const pendingRequest = data?.pendingRequest || responseTrip?.pendingRequest || selectedTrip.pendingRequest || null;
-      const resolvedPhase = resolveBookingPhase({
+      const mergedResponseTrip = {
         ...selectedTrip,
         ...responseTrip,
         linkedBooking,
@@ -941,24 +1358,50 @@ function App() {
         pendingResponse: data?.pendingResponse || responseTrip?.pendingResponse || null,
         supportReviewPending: Boolean(data?.supportReviewPending || responseTrip?.supportReviewPending),
         notificationType: data?.notificationType || responseTrip?.notificationType || null,
-      });
+      };
+      const resolvedPhase = normalizeTripStatus(mergedResponseTrip.status) === 'EXPIRED'
+        ? 'expired'
+        : resolveBookingPhase(mergedResponseTrip);
+      const nextFare = buildFareSnapshot(mergedResponseTrip);
       const nextBooking: BookingRequestState = {
         ...requestSnapshot,
-        bookingReference: bookingReferenceFromResponse || (resolvedPhase === "confirmed" ? "Confirmed" : "Reserved"),
+        bookingId,
+        bookingReference: bookingReferenceFromResponse || (bookingId ? String(bookingId) : resolvedPhase === "confirmed" ? "Confirmed" : "Reserved"),
+        fare: nextFare.fare,
+        supportFare: nextFare.supportFare ?? requestSnapshot.supportFare,
+        originalFare: nextFare.originalFare ?? requestSnapshot.originalFare,
+        discountPercentage: nextFare.discountPercentage ?? requestSnapshot.discountPercentage,
+        discountAmount: nextFare.discountAmount ?? requestSnapshot.discountAmount,
         pendingRequest,
         status: responseTrip?.status ?? data?.status ?? selectedTrip.status ?? null,
         bookingState: responseTrip?.bookingState ?? data?.bookingState ?? selectedTrip.bookingState ?? null,
-        phase: resolvedPhase === "confirmed" ? "confirmed" : resolvedPhase === "support" ? "support" : "pending",
-        driver: getTripDriverLabel(responseTrip || selectedTrip),
+        phase: resolvedPhase === "confirmed" ? "confirmed" : resolvedPhase === "support" ? "support" : resolvedPhase === "expired" ? "expired" : "pending",
+        driver: resolvedPhase === "support" ? "Customer Support" : getTripDriverLabel(responseTrip || selectedTrip),
       };
 
+      setTrips((current) => current.filter((trip) => String(trip.id) !== String(selectedTrip.id)));
       setBookingRequestState(nextBooking);
       bookingRequestStateRef.current = nextBooking;
       upsertSessionBooking(nextBooking);
       setBookingReference(nextBooking.bookingReference);
       setCustomerSession((current) => current ? { ...current, name: nextBooking.customerName } : current);
       closeBooking();
-      void refreshTrips().catch(() => undefined);
+      if (bookingId) {
+        void refreshBookingConfirmation(bookingId, { retry: true }).catch((err) => {
+          console.warn(`${UI_DEBUG_PREFIX} failed to refresh booking confirmation after request`, err);
+        });
+      }
+      try {
+        await refreshTrips();
+      } catch {
+        setPageNotice(
+          nextBooking.phase === 'pending'
+            ? 'Your booking request is waiting for driver response. Availability will refresh on the next reload.'
+            : nextBooking.phase === 'confirmed'
+              ? 'Return trip booking is confirmed. Availability will refresh on the next reload.'
+              : 'Return trip status changed. Availability will refresh on the next reload.',
+        );
+      }
     } catch (err) {
       if (err instanceof ApiRequestError && err.status === 409) {
         closeBooking();
@@ -1429,24 +1872,33 @@ function App() {
             </button>
             <div className={`success-modal__icon${bookingRequestState.phase !== 'confirmed' ? ` success-modal__icon--${bookingRequestState.phase}` : ''}`}>
               {bookingRequestState.phase === 'pending' ? <TimerReset size={34} /> : null}
-              {bookingRequestState.phase === 'confirmed' ? <CheckCircle2 size={34} /> : null}
               {bookingRequestState.phase === 'support' ? <ShieldCheck size={34} /> : null}
+              {bookingRequestState.phase === 'confirmed' ? <CheckCircle2 size={34} /> : null}
             </div>
             <div className="success-modal__copy">
               <p className="booking-panel__eyebrow">
-                {bookingRequestState.phase === 'pending' ? 'Waiting for driver response' : null}
-                {bookingRequestState.phase === 'confirmed' ? 'Booking confirmed' : null}
-                {bookingRequestState.phase === 'support' ? 'Customer support will contact you' : null}
+                {bookingRequestState.phase === 'pending' ? 'Waiting for Driver Response' : null}
+                {bookingRequestState.phase === 'support' ? 'Customer Support' : null}
+                {bookingRequestState.phase === 'confirmed' ? 'Booking Confirmed' : null}
+                {bookingRequestState.phase === 'rejected' ? 'Request Rejected' : null}
+                {bookingRequestState.phase === 'expired' ? 'Request Expired' : null}
+                {bookingRequestState.phase === 'error' ? 'Request Status Unclear' : null}
               </p>
               <h2>
-                {bookingRequestState.phase === 'pending' ? 'Your booking is reserved' : null}
-                {bookingRequestState.phase === 'support' ? 'Your request is under review' : null}
-                {bookingRequestState.phase === 'confirmed' ? 'Your booking is confirmed' : null}
+                {bookingRequestState.phase === 'pending' ? 'Your request is pending' : null}
+                {bookingRequestState.phase === 'support' ? 'Customer Support is arranging another driver.' : null}
+                {bookingRequestState.phase === 'confirmed' ? 'Return trip booked successfully' : null}
+                {bookingRequestState.phase === 'rejected' ? 'This trip is available again' : null}
+                {bookingRequestState.phase === 'expired' ? 'This return trip expired' : null}
+                {bookingRequestState.phase === 'error' ? 'We could not confirm this request yet' : null}
               </h2>
               <p>
-                {bookingRequestState.phase === 'pending' ? 'Waiting for driver response.' : null}
-                {bookingRequestState.phase === 'support' ? 'Customer support will contact you shortly.' : null}
-                {bookingRequestState.phase === 'confirmed' ? 'Your booking is confirmed.' : null}
+                {bookingRequestState.phase === 'pending' ? 'The driver has not responded yet. This screen will update automatically.' : null}
+                {bookingRequestState.phase === 'support' ? 'Pricing has been updated and the original driver is no longer assigned to this booking.' : null}
+                {bookingRequestState.phase === 'confirmed' ? 'The driver accepted the request and the booking is now confirmed.' : null}
+                {bookingRequestState.phase === 'rejected' ? 'The driver did not accept this request. You can close this and try again.' : null}
+                {bookingRequestState.phase === 'expired' ? 'The trip expired before the driver accepted it. Please pick another return trip.' : null}
+                {bookingRequestState.phase === 'error' ? 'The request was created, but confirmation was not returned. Please retry or refresh the trip list.' : null}
               </p>
             </div>
             <div className="success-modal__grid">
@@ -1472,9 +1924,29 @@ function App() {
               </div>
               <div>
                 <label>Driver</label>
-                <p>{bookingRequestState.driver}</p>
+                <p>{bookingRequestState.phase === 'support' ? 'Not assigned yet' : bookingRequestState.driver}</p>
               </div>
             </div>
+            {bookingRequestState.phase === 'support' && (
+              <div className="support-fare-card">
+                <div>
+                  <label>Original fare</label>
+                  <p>{bookingRequestState.farePending ? 'Fare update pending' : bookingRequestState.originalFare || 'Fare update pending'}</p>
+                </div>
+                <div>
+                  <label>{bookingRequestState.discountLabel || 'Discount'}</label>
+                  <p>
+                    {bookingRequestState.farePending
+                      ? 'Fare update pending'
+                      : `${bookingRequestState.discountPercentage || '-'}${bookingRequestState.discountAmount ? ` (${bookingRequestState.discountAmount})` : ''}`}
+                  </p>
+                </div>
+                <div>
+                  <label>Updated booking fare</label>
+                  <p>{bookingRequestState.farePending ? 'Fare update pending' : bookingRequestState.fare}</p>
+                </div>
+              </div>
+            )}
             <div className="success-modal__actions">
               <button className="ghost-btn ghost-btn--soft" type="button" onClick={() => setBookingRequestState(null)}>
                 Close

@@ -1,4 +1,4 @@
-import type { ApiResponse, ReturnTrip, ReturnTripAvailableEvent, ReturnTripStatusChangedEvent, ReturnTripUnavailableEvent } from './types';
+import type { ApiResponse, BookingConfirmation, ReturnTrip, ReturnTripAvailableEvent, ReturnTripStatusChangedEvent, ReturnTripUnavailableEvent } from './types';
 
 //const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://t264m53j-3000.inc1.devtunnels.ms';
 //const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://sit.api.c4d.smartapis.cyou';
@@ -98,6 +98,13 @@ const toTrip = (payload: ApiResponse): ReturnTrip | null => {
   return null;
 };
 
+const toBookingConfirmation = (payload: unknown): BookingConfirmation | null => {
+  if (!payload || typeof payload !== 'object') return null;
+  const source = payload as { data?: unknown };
+  const data = source.data && typeof source.data === 'object' ? source.data : payload;
+  return data as BookingConfirmation;
+};
+
 const normalizeUnavailableEvent = (payload: unknown): ReturnTripUnavailableEvent | null => {
   if (!payload || typeof payload !== 'object') return null;
 
@@ -192,9 +199,15 @@ const normalizeStatusChangedEvent = (payload: unknown): ReturnTripStatusChangedE
     linkedBooking?: ReturnTripStatusChangedEvent['linkedBooking'];
     Driver?: ReturnTrip['Driver'];
     cabSnapshot?: ReturnTrip['cabSnapshot'];
+    supportFare?: ReturnTripStatusChangedEvent['supportFare'];
+    finalPrice?: number | string | null;
+    driverOfferPrice?: number | string | null;
+    discount?: number | string | null;
+    discountAmount?: number | string | null;
+    unavailableReturnTripIds?: Array<number | string>;
     trip?: ReturnTrip | null;
-    ts?: number;
     data?: unknown;
+    ts?: number;
   };
 
   if (source.data !== undefined) {
@@ -216,6 +229,12 @@ const normalizeStatusChangedEvent = (payload: unknown): ReturnTripStatusChangedE
     linkedBooking: source.linkedBooking ?? source.trip?.linkedBooking ?? null,
     Driver: source.Driver ?? source.trip?.Driver ?? null,
     cabSnapshot: source.cabSnapshot ?? source.trip?.cabSnapshot ?? null,
+    supportFare: source.supportFare ?? source.trip?.supportFare ?? null,
+    finalPrice: source.finalPrice ?? source.trip?.finalPrice ?? null,
+    driverOfferPrice: source.driverOfferPrice ?? source.trip?.driverOfferPrice ?? null,
+    discount: source.discount ?? source.trip?.discount ?? null,
+    discountAmount: source.discountAmount ?? source.trip?.discountAmount ?? null,
+    unavailableReturnTripIds: Array.isArray(source.unavailableReturnTripIds) ? source.unavailableReturnTripIds : [],
     trip: source.trip ?? null,
     ts: source.ts,
   };
@@ -276,11 +295,17 @@ export async function loadReturnTrip(tripId: number | string): Promise<ReturnTri
   return toTrip(payload);
 }
 
+export async function loadBookingConfirmation(bookingId: number | string): Promise<BookingConfirmation | null> {
+  const payload = await requestJson<unknown>(`/api/customer/dev/bookingConfirmation/${bookingId}`);
+  return toBookingConfirmation(payload);
+}
+
 export function subscribeReturnTripUnavailable(
   onUnavailable: (event: ReturnTripUnavailableEvent) => void,
   onAvailable?: (event: ReturnTripAvailableEvent) => void,
   onStatusChanged?: (event: ReturnTripStatusChangedEvent) => void,
   onConnectionError?: (error: Event) => void,
+  onConnectionOpen?: () => void,
 ) {
   if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
     console.warn(`${SSE_DEBUG_PREFIX} EventSource is not available in this browser/environment`);
@@ -317,9 +342,9 @@ export function subscribeReturnTripUnavailable(
         statusChangedEvent.tripId !== null ||
         statusChangedEvent.bookingId !== null ||
         statusChangedEvent.status !== null ||
-        statusChangedEvent.bookingState !== null
-      ) &&
-      (statusChangedEvent.eventType === 'return_trip_status_changed' || statusChangedEvent.status !== null || statusChangedEvent.bookingState !== null)
+        statusChangedEvent.bookingState !== null ||
+        statusChangedEvent.eventType !== undefined
+      )
     ) {
       console.info(`${SSE_DEBUG_PREFIX} parsed status change event`, statusChangedEvent);
       onStatusChanged?.(statusChangedEvent);
@@ -381,6 +406,7 @@ export function subscribeReturnTripUnavailable(
 
   const handleOpen = () => {
     console.info(`${SSE_DEBUG_PREFIX} stream connected`);
+    onConnectionOpen?.();
   };
 
   stream.addEventListener('return_trip_unavailable', handleUnavailableMessage as EventListener);

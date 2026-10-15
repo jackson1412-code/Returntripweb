@@ -13,6 +13,44 @@ export type CabSnapshot = {
   modelYear?: string | number | null;
 };
 
+export type SupportFare = {
+  originalFare?: number | string | null;
+  discountPercentage?: number | string | null;
+  discountAmount?: number | string | null;
+  finalPrice?: number | string | null;
+  originalDriverDiscountPercentage?: number | string | null;
+  originalDriverOfferPrice?: number | string | null;
+};
+
+export type ReturnTripPricing = {
+  source?: 'RETURN_TRIP_SUPPORT' | 'RETURN_TRIP_DRIVER' | string | null;
+  originalFare?: number | string | null;
+  discountPercentage?: number | string | null;
+  discountAmount?: number | string | null;
+  finalPrice?: number | string | null;
+  estimatedDistance?: number | string | null;
+};
+
+export type BookingConfirmation = {
+  id?: number | string | null;
+  bookingId?: number | string | null;
+  bookingReference?: string | null;
+  bookingNumber?: string | null;
+  status?: string | null;
+  bookingState?: string | null;
+  ownership?: string | null;
+  driverId?: number | string | null;
+  returnTripId?: number | string | null;
+  returnTripPricing?: ReturnTripPricing | null;
+  assignedDriver?: ReturnTrip['Driver'];
+  driver?: ReturnTrip['Driver'];
+  Driver?: ReturnTrip['Driver'];
+  cabSnapshot?: CabSnapshot | null;
+  returnTrip?: ReturnTrip | null;
+  data?: BookingConfirmation;
+  [key: string]: unknown;
+};
+
 export type ReturnTrip = {
   id: number;
   driverId: number;
@@ -42,6 +80,8 @@ export type ReturnTrip = {
   cabSnapshot?: CabSnapshot | null;
   driverOfferPrice?: number | string | null;
   finalPrice?: number | string | null;
+  supportFare?: SupportFare | null;
+  discount?: number | string | null;
   discountAmount?: number | string | null;
   estimatedMin?: number | null;
   expiresAt?: string | null;
@@ -73,7 +113,7 @@ export type BookingCustomerDraft = {
 export type ApiResponse = {
   success?: boolean;
   code?: number;
-  data?: ReturnTrip | ReturnTrip[] | { rows?: ReturnTrip[]; count?: number; totalPages?: number };
+  data?: ReturnTrip | ReturnTrip[] | BookingConfirmation | { rows?: ReturnTrip[]; count?: number; totalPages?: number };
   pagination?: {
     currentPage?: number;
     totalPages?: number;
@@ -124,6 +164,12 @@ export type ReturnTripStatusChangedEvent = {
   } | null;
   Driver?: ReturnTrip['Driver'];
   cabSnapshot?: ReturnTrip['cabSnapshot'];
+  supportFare?: SupportFare | null;
+  finalPrice?: number | string | null;
+  driverOfferPrice?: number | string | null;
+  discount?: number | string | null;
+  discountAmount?: number | string | null;
+  unavailableReturnTripIds?: Array<number | string>;
   trip?: ReturnTrip | null;
   ts?: number;
 };
