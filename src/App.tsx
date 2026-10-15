@@ -1622,7 +1622,7 @@ function App() {
 
       {selectedTrip ? (
         <div className="booking-drawer">
-          <div className="booking-drawer__overlay" onClick={closeBooking} />
+          <div className="booking-drawer__overlay" />
           <aside className="booking-panel">
             <div className="booking-panel__header">
               <div>
@@ -1865,7 +1865,7 @@ function App() {
 
       {bookingRequestState ? (
         <div className="success-modal">
-          <div className="success-modal__overlay" onClick={() => setBookingRequestState(null)} />
+          <div className="success-modal__overlay" />
           <div className="success-modal__card">
             <button className="icon-btn success-modal__close" type="button" onClick={() => setBookingRequestState(null)}>
               <X size={18} />
@@ -1958,7 +1958,7 @@ function App() {
 
       {sessionConflict ? (
         <div className="success-modal">
-          <div className="success-modal__overlay" onClick={() => setSessionConflict(null)} />
+          <div className="success-modal__overlay" />
           <div className="success-modal__card success-modal__card--compact">
             <button className="icon-btn success-modal__close" type="button" onClick={() => setSessionConflict(null)}>
               <X size={18} />
@@ -1985,7 +1985,7 @@ function App() {
 
       {profileView ? (
         <div className="success-modal">
-          <div className="success-modal__overlay" onClick={() => setProfileView(null)} />
+          <div className="success-modal__overlay" />
           <div className="success-modal__card profile-screen">
             <button className="icon-btn success-modal__close" type="button" onClick={() => setProfileView(null)}>
               <X size={18} />
