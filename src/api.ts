@@ -1,7 +1,9 @@
 import type { ApiResponse, BookingConfirmation, ReturnTrip, ReturnTripAvailableEvent, ReturnTripStatusChangedEvent, ReturnTripUnavailableEvent } from './types';
 
 //const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://t264m53j-3000.inc1.devtunnels.ms';
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://sit.api.c4d.smartapis.cyou';
+const API_BASE = import.meta.env.DEV
+  ? '/backend'
+  : import.meta.env.VITE_API_BASE_URL || 'https://uat.api.c4d.smartapis.cyou';
 //const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://uat.api.c4d.smartapis.cyou';
 
 const RETURN_TRIPS_SSE_PATH = import.meta.env.VITE_RETURN_TRIPS_SSE_PATH || '/api/customer/dev/return-trips/events';
@@ -295,8 +297,17 @@ export async function loadReturnTrip(tripId: number | string): Promise<ReturnTri
   return toTrip(payload);
 }
 
-export async function loadBookingConfirmation(bookingId: number | string): Promise<BookingConfirmation | null> {
-  const payload = await requestJson<unknown>(`/api/customer/dev/bookingConfirmation/${bookingId}`);
+export async function loadBookingConfirmation(bookingId: number | string, customerSessionId: string): Promise<BookingConfirmation | null> {
+  if (!customerSessionId.trim()) {
+    throw new ApiRequestError('CUSTOMER_SESSION_REQUIRED', 401, 401);
+  }
+  const payload = await requestJson<{ success?: boolean; code?: number; message?: string; sessionCode?: string; data?: unknown }>(
+    `/api/customer/dev/bookingConfirmation/${bookingId}`,
+    { headers: { token: customerSessionId } },
+  );
+  if (payload.code === 401 || payload.success === false) {
+    throw new ApiRequestError(payload.sessionCode || payload.message || 'Unable to fetch booking details', payload.code === 401 ? 401 : 400, payload.code);
+  }
   return toBookingConfirmation(payload);
 }
 
